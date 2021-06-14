@@ -881,13 +881,13 @@ plotFig5Main = robjects.r('''
                             pdf(file = "plot_balanced_mnist.pdf")
                             plot(etas, as.numeric(as.character(mean_rep_test_bigSurv[1,])), type = "l", pch=20, log="x", ylab = "conrodance", xlab=expression(eta), ylim = c(0.5,0.95), lwd=2, col="green")
                             lines(etas, as.numeric(as.character(mean_rep_test_bigSurv[2,])), lty=2, pch=0, lwd=2, col="green")
-                            #lines(etas, as.numeric(as.character(mean_rep_test_bigSurv[3,])), lty=4, pch=0, lwd=2, col="green")
+                            lines(etas, as.numeric(as.character(mean_rep_test_bigSurv[3,])), lty=4, pch=0, lwd=2, col="green")
                             lines(etas, as.numeric(as.character(mean_rep_test_MTLR[1,])), lty=1, pch=1, col='blue', lwd=2)
                             lines(etas, as.numeric(as.character(mean_rep_test_MTLR[2,])), lty=2, pch=1, col='blue', lwd=2)
-                            #lines(etas, as.numeric(as.character(mean_rep_test_MTLR[3,])), lty=4, pch=1, col='blue', lwd=2)
+                            lines(etas, as.numeric(as.character(mean_rep_test_MTLR[3,])), lty=4, pch=1, col='blue', lwd=2)
                             lines(etas, as.numeric(as.character(mean_rep_test_PMF[1,])), lty=1, pch=1, col='red', lwd=2)
                             lines(etas, as.numeric(as.character(mean_rep_test_PMF[2,])), lty=2, pch=1, col='red', lwd=2)
-                            #lines(etas, as.numeric(as.character(mean_rep_test_PMF[3,])), lty=4, pch=1, col='red', lwd=2)
+                            lines(etas, as.numeric(as.character(mean_rep_test_PMF[3,])), lty=4, pch=1, col='red', lwd=2)
                             lines(etas, mean_rep_test_oracle, lty=1, pch=1, col='black', lwd=2)
                             legend("bottomright", lty = c(rep(c(1,2,4),3), 1), 
                             col=c("green", "green", "green", "red","red","red", "blue","blue","blue", "black"),
@@ -908,9 +908,9 @@ plotFig5Main(etas, mean_rep_test_bigSurv, mean_rep_test_MTLR, mean_rep_test_PMF,
 
 # Predicted risk score for bigSurv
 f_betas_N50_eta01 = f_betas_bigSurv[0,0,0,:]
-f_betas_N50_eta50 = f_betas_bigSurv[0,0,1,:]
-f_betas_N10000_eta01 = f_betas_bigSurv[0,1,0,:]
-f_betas_N10000_eta50 = f_betas_bigSurv[0,1,1,:]
+f_betas_N50_eta50 = f_betas_bigSurv[0,0,5,:]
+f_betas_N10000_eta01 = f_betas_bigSurv[0,2,0,:]
+f_betas_N10000_eta50 = f_betas_bigSurv[0,2,5,:]
 
 plotFig3Supp = robjects.r('''
                         # plots figure 3 in the supplementary materials
