@@ -60,14 +60,8 @@ Data = "nwtco"
 
 # hyperparameters for Random Survival Forest
 num_trees = [100, 500]
-num_trees = [10, 10]
 num_nodes_rsf = [5, 15]
-num_nodes_rsf = [5]
-m_tries = [2, 3, 4]
-m_tries = [2]
-
-# hyperparameters for BigSurvSGD
-stata_sizes_bigSurvSGD = [2, 5, 10, 20, 50]
+m_tries = [2, 3, 4, 5]
 
 # hyperparameters for MLP-based models
 # Network architecture
@@ -76,16 +70,14 @@ out_features = 1
 BATCH_NORM = False
 ACTIVATION = 'relu'
 # dropout rates
-dropouts = [0.0, 0.1, 0.2]  # 0.0, 0.1, 0.2, 0.3, 0.4, 0.5
-dropouts = [0.1]
+dropouts = [0.0, 0.1, 0.2]
 
 output_bias = False
 # batch_sizes
 batch_sizes = [1, 32]
-batch_sizes = [64]
 
 # Maximum number of epochs
-epochs = 10
+epochs = 100
 
 # Specify if you want to use early stop with bigSurvMLP
 if_early_stop = True
@@ -97,8 +89,7 @@ Patience = 5
 strata_size = 2
 
 # Learning rates
-LRs = [0.0001, 0.001, 0.01]  # 0.1, 0.01, 0.001, 0.0001
-LRs = [0.0001]  # 0.1, 0.01, 0.001, 0.0001
+LRs = [0.01, 0.001, 0.0001]  # 0.1, 0.01, 0.001, 0.0001
 
 # epoch step for calculating testing concordance
 epoch_test = 5
@@ -107,13 +98,13 @@ verbose = False
 num_durations = 100
 
 # Number of training/testing splits
-num_rep = 1
+num_rep = 100
 
 # Number of folds for cross-validation
 num_folds = 5
 
 # Number of initial repetitions to tune the hyperparameters
-num_rep_hyper = 1
+num_rep_hyper = 10
 ################################################################################
 
 

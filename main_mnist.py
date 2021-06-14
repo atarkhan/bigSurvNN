@@ -22,7 +22,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 #############################################
 ## parameters
-epochs = 100  # maximum number of epochs
+epochs = 200  # maximum number of epochs
 epoch_test = 5  # After any epoch_test epochs, we calculate validation accuracy (to save coputing time)
 Patience = 5  # number of epochs continuing after reaching maximum validation concordance index
 p_c = 0.2  # probability of censoring
@@ -30,20 +30,17 @@ num_channels = 1  # MNIST has only one grey channel
 if_early_stop = True  # if we want to use early stopping
 strata_size = 2  # number of patient per strata (s) for our framework- different from batch size
 epoch_per_test = 5  # epoch step for which we calculate validation/test error
-N_valid = 100  # validation sample size
-N_trains = [50, 100]  # training sample size
-batch_sizes = [16]  # mini-batch sizes
+N_valid = 1000  # validation sample size
+N_trains = [50, 1000, 1000]  # training sample size
+batch_sizes = [16, 64]  # mini-batch sizes
 dropouts = [0.0, 0.2, 0.4]  # dropout rates
-dropouts = [0.2]  # dropout rates
-LRs = [0.01, 0.001]  # learning rates
-LRs = [0.001]  # learning rates
+LRs = [0.001, 0.0001]  # learning rates
 L2s = [0, 1e-4, 1e-2, 1e-1]  # coefficient of L2 regularization penalty
-L2s = [1e-2]
 num_filters = [32, 64, 64]
-num_intervals = [100]  # number of bins for MTLR and PMF
+num_intervals = [10, 100]  # number of bins for MTLR and PMF
 N_FC = 128  # number of nodes in last fully-connected layers for bigSurvCNN
 ma_weight = 0.8  # moving average weight for stopping criterion of bigSurvCNN
-etas = [0.1, 5]  # proportional constant for risk score
+etas = [0.1, 0.3, 0.5, 0.7, 0.9, 5]  # proportional constant for risk score
 digit_ratio = np.repeat(0.1, 10)  # percentage of digits to use for validation and training data
 
 
