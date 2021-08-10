@@ -37,7 +37,6 @@ ma_weight = 0.8  # moving average weight for stopping criterion of bigSurvCNN
 etas = [0.1, 0.3, 0.5, 0.7, 0.9, 5]  # proportional constant for risk score
 digit_ratio = np.repeat(0.1, 10)  # percentage of digits to use for validation and training data
 
-
 #############################################
 
 
