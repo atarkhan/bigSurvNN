@@ -1,118 +1,118 @@
 ################################################################################
-## import all required packages
-import sys
-import numpy as np
-import random
-import tensorflow as tf
-import torchtuples as tt
-from torchvision import datasets, transforms
-import os
-import time
-import pandas as pd
-import pycox as Pycox
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from pycox.models import MTLR, PMF
-from torch.utils.data.sampler import SubsetRandomSampler
-
-from sklearn.preprocessing import StandardScaler
-from sklearn_pandas import DataFrameMapper
-import torchtuples as tt
-
-import rpy2.robjects as robjects
-import rpy2.robjects.packages as rpackages
-from rpy2.robjects import pandas2ri
-pandas2ri.activate()
-# import R's "base" package
-base = rpackages.importr('base')
-# import R's utility package
-utils = rpackages.importr('utils')
-
-# Install R packages needed for coxph(), RSF, and bigSurvSGD
-"""
-utils.install_packages('survival')
-utils.install_packages('randomForestSRC')
-utils.install_packages('parallel')
-utils.install_packages('doParallel')
-utils.install_packages('bigmemory')
-utils.install_packages('bigSurvSGD')
-"""
-## Load R packages needed for coxph(), RSF, and bigSurvSGD
-survival = rpackages.importr('survival')
-randomForestSRC = rpackages.importr('randomForestSRC')
-bigSurvSGD = rpackages.importr('bigSurvSGD')
-survival = rpackages.importr('survival')
-bigmemory = rpackages.importr('bigmemory')
-doParallel = rpackages.importr('doParallel')
-parallel = rpackages.importr('parallel')
-################################################################################
-
-
-
-
-################################################################################
-## parameters
-# Specify survival dataset you want to do analysis
-Data = "nwtco"
-
-# hyperparameters for Random Survival Forest
-num_trees = [100, 500]
-num_nodes_rsf = [5, 15]
-m_tries = [2, 3, 4, 5]
-
-# hyperparameters for MLP-based models
-# Network architecture
-num_nodes = [32, 32]
-out_features = 1
-BATCH_NORM = False
-ACTIVATION = 'relu'
-# dropout rates
-dropouts = [0.0, 0.1, 0.2]
-
-output_bias = False
-# batch_sizes
-batch_sizes = [1, 32]
-
-# Maximum number of epochs
-epochs = 100
-
-# Specify if you want to use early stop with bigSurvMLP
-if_early_stop = True
-
-# number of patience epochs
-Patience = 5
-
-# strata size for bigSurvMLP
-strata_size = 2
-
-# Learning rates
-LRs = [0.01, 0.001, 0.0001]  # 0.1, 0.01, 0.001, 0.0001
-
-# epoch step for calculating testing concordance
-epoch_test = 5
-verbose = False
-# number of bins for discrete-time models
-num_durations = 100
-
 # Number of training/testing splits
-num_rep = 100
+startRep = 0
+endRep = 99
+num_rep = endRep - startRep + 1
 
 # Number of folds for cross-validation
 num_folds = 5
 
-# Number of initial repetitions to tune the hyperparameters
-num_rep_hyper = 10
+
 ################################################################################
-
-
 
 
 ################################################################################
 ## data preprocessing and preparation ##
 ################################################################################
-def initializer_Data(Data):
+def initializer_params():
+    ## hyperparameters for RSF
+    num_trees = [100, 500]
+    #num_trees = [10]
+    num_nodes_rsf = [5, 15]
+    #num_nodes_rsf = [5]
+    m_tries = [2, 3, 4, 5]
+    #m_tries = [2]
+    hyperParams_RSF = []
+    for i_tree in num_trees:
+        for i_node in num_nodes_rsf:
+            for i_try in m_tries:
+                hyperParams_RSF.append([i_tree, i_node, i_try])
+
+    # hyperparameters for BigSurvSGD
+    hyperParams_BigSurv = [2, 5, 10, 20, 50]
+
+    # Network architecture
+    num_nodes = [32, 32]
+    out_features = 1
+    BATCH_NORM = False
+    ACTIVATION = 'relu'
+    dropouts = [0.0, 0.2, 0.4]  # 0.0, 0.1, 0.2, 0.3, 0.4, 0.5
+    #dropouts = [0.0]
+
+    output_bias = False
+    # batch_sizes = [2,4,8,16,32,64,128, 256] # 32, 64, 128, 256
+    batch_sizes = [64, 256]
+    #batch_sizes = [256]
+
+    strata_size = 2
+    epochs = 200
+
+    if_early_stop = True
+    Patience = 5
+
+    epoch_test = 5  # epoch step for calculating testing concordance
+
+    num_durations = 100  # number of discrete intervals on time axis
+    LRs = [0.0001, 0.001, 0.01]  # 0.1, 0.01, 0.001, 0.0001
+    #LRs = [0.001]  # 0.1, 0.01, 0.001, 0.0001
+
+    # hyperparameters for BigSurvMLP
+    hyperParams_BigSurvMLP = []
+    for i_bs in batch_sizes:
+        for i_dr in dropouts:
+            for i_lr in LRs:
+                hyperParams_BigSurvMLP.append([i_bs, i_dr, i_lr, num_nodes, BATCH_NORM, ACTIVATION,
+                                               epochs, strata_size, epoch_test, if_early_stop, Patience])
+
+    # hyperparameters for other continuous methods
+    hyperParams_Cont = []
+    for i_bs in batch_sizes:
+        for i_dr in dropouts:
+            for i_lr in LRs:
+                hyperParams_Cont.append([i_bs, i_dr, i_lr, num_nodes, BATCH_NORM,
+                                         epochs, if_early_stop, Patience])
+
+    # hyperparameters for other continuous methods
+    hyperParams_Disc = []
+    for i_bs in batch_sizes:
+        for i_dr in dropouts:
+            for i_lr in LRs:
+                hyperParams_Disc.append([i_bs, i_dr, i_lr, num_nodes, BATCH_NORM,
+                                         epochs, num_durations, if_early_stop, Patience])
+
+    return hyperParams_RSF, hyperParams_BigSurv, hyperParams_BigSurvMLP, \
+           hyperParams_Cont, hyperParams_Disc
+
+
+################################################################################
+
+
+################################################################################
+## import modules ##
+################################################################################
+def initializer_modules():
+    import tensorflow as tf
+    import multiprocessing as mp
+    import numpy as np
+    import time
+    import sklearn
+    import random
+    import os
+    from sklearn.preprocessing import StandardScaler
+    from sklearn_pandas import DataFrameMapper
+    import torchtuples as tt
+    import pandas as pd
+    import pycox as Pycox
+    return tf, mp, np, time, sklearn, random, os, StandardScaler, DataFrameMapper, tt, pd, Pycox
+
+
+################################################################################
+
+
+################################################################################
+## data preprocessing and preparation ##
+################################################################################
+def initializer_Data(Data, Pycox, pd, StandardScaler, DataFrameMapper):
     if Data == "metabric":
         ## METABRIC
         df_all = Pycox.datasets.metabric.read_df()
@@ -194,8 +194,9 @@ def initializer_Data(Data):
         leave = [(col, None) for col in cols_leave]
         x_mapper = DataFrameMapper(standardize + leave)
         x_all = x_mapper.fit_transform(df_all).astype('float32')
-
     return df_all, x_all
+
+
 ################################################################################
 
 
@@ -209,30 +210,51 @@ def initializer_Data(Data):
 ################################################################################
 ## RSF: Calling randomForestSRC package and claculate its concordance
 def rsfConcPy(x):
+    import numpy as np
+    import rpy2.robjects as robjects
+    import rpy2.robjects.packages as rpackages
+    from rpy2.robjects import pandas2ri
+    pandas2ri.activate()
+    # import R's "base" package
+    base = rpackages.importr('base')
+    # import R's utility package
+    utils = rpackages.importr('utils')
+    ## if 'survival' and 'randomForestSRC' are not installed, install them by de-commenting two below lines:
+    # utils.install_packages('survival')
+    # utils.install_packages('randomForestSRC')
+    ## Load 'survival' and 'randomForestSRC' packages
+    survival = rpackages.importr('survival')
+    randomForestSRC = rpackages.importr('randomForestSRC')
     num_tree = x[0]
     num_node = x[1]
     m_try = x[2]
-    return_conc = x[3]
-    df_train = x[4]
-    if return_conc == 'valid':
-        df_test = x[4]
-    else:
-        df_test = x[5]
+    df_train = x[3]
+    df_valid = x[4]
 
     rsfConc = robjects.r('''
-                    # A function to estimate concordance using random forest
-                    concRandomForest <- function(df_trainCV, df_testCV, num_tree, num_node, m_try){
-                        for (i in 1:ncol(df_testCV)){
-                            df_testCV[,i] <- as.numeric(as.character(df_testCV[,i]))
-                            df_trainCV[,i] <- as.numeric(as.character(df_trainCV[,i]))
+                        # A function to estimate concordance using random forest
+                        concRandomForest <- function(df_train, df_valid, num_tree, num_node, m_try){
+                            for (i in 1:ncol(df_valid)){
+                                df_valid[,i] <- as.numeric(as.character(df_valid[,i]))
+                                df_train[,i] <- as.numeric(as.character(df_train[,i]))
+                            }
+                            modRFSRC <- rfsrc(Surv(time, status) ~ ., data = df_train, ntree = num_tree, nodesize=num_node, mtry=m_try)
+                            survival.results <- predict(modRFSRC, newdata = df_valid)$survival
+                            median.survival <- apply(survival.results, 1, function(x) median(x))
+                            as.numeric(median.survival)
                         }
-                        modRFSRC <- rfsrc(Surv(time, status) ~ ., data = df_trainCV, ntree = num_tree, nodesize=num_node, mtry=m_try)
-                        survival.results <- predict(modRFSRC, newdata = df_testCV)
-                        as.numeric(1-survival.results
-                        $err.rate[length(survival.results$err.rate)])
-                    }
-        ''')
-    return (rsfConc(df_train, df_test, num_tree, num_node, m_try))
+            ''')
+    try:
+        f_beta = -rsfConc(df_train, df_valid, num_tree, num_node, m_try)
+        times_valid = df_valid['time'].to_numpy(dtype="float64")
+        events_valid = df_valid['status'].to_numpy(dtype="int64")
+        orderedIndices = np.argsort(times_valid)
+        Events = np.array(events_valid)[orderedIndices]
+        f_beta = np.array(f_beta)[orderedIndices]
+        Times = np.array(times_valid)[orderedIndices]
+        return(calc_conc(f_beta, Times, Events))
+    except:
+        return(np.nan)
 
 
 ################################################################################
@@ -241,25 +263,37 @@ def rsfConcPy(x):
 ################################################################################
 ## Calling coxph package and claculate its concordance
 def coxPHConcPy(x):
+    import rpy2.robjects as robjects
+    import rpy2.robjects.packages as rpackages
+    from rpy2.robjects import pandas2ri
+    pandas2ri.activate()
+    ## import R's "base" package
+    base = rpackages.importr('base')
+    ## import R's utility package
+    utils = rpackages.importr('utils')
+    ## if 'survival' is not installed, install it by de-commenting below line:
+    # utils.install_packages('survival')
+    survival = rpackages.importr('survival')
+
     df_train = x[0]
     df_test = x[1]
 
     coxConc = robjects.r('''
-        # A function to estimate beta and concordance using bigSurvSGD
-        concCox <- function(df_train, df_test){
-            for (i in 1:ncol(df_test)){
-                df_test[,i] <- as.numeric(as.character(df_test[,i]))
-                df_train[,i] <- as.numeric(as.character(df_train[,i]))
+            # A function to estimate beta and concordance using bigSurvSGD
+            concCox <- function(df_train, df_test){
+                for (i in 1:ncol(df_test)){
+                    df_test[,i] <- as.numeric(as.character(df_test[,i]))
+                    df_train[,i] <- as.numeric(as.character(df_train[,i]))
+                }
+                beta <- coxph(formula = Surv(time, status)~., data=df_train)$coef 
+                f_beta <- as.matrix(df_test[, -which(!is.na(match(colnames(df_test), c("time", "status"))))]) %*% matrix(beta, ncol=1)
+                orderedIndices <- order(df_test$time, decreasing = F)
+                f_beta = f_beta[orderedIndices]
+                Times = df_test$time[orderedIndices] 
+                Events = df_test$status[orderedIndices]  
+                list(f_beta=f_beta, Times=Times, Events=Events, beta=beta)
             }
-            beta <- coxph(formula = Surv(time, status)~., data=df_train)$coef 
-            f_beta <- as.matrix(df_test[, -which(!is.na(match(colnames(df_test), c("time", "status"))))]) %*% matrix(beta, ncol=1)
-            orderedIndices <- order(df_test$time, decreasing = F)
-            f_beta = f_beta[orderedIndices]
-            Times = df_test$time[orderedIndices] 
-            Events = df_test$status[orderedIndices]  
-            list(f_beta=f_beta, Times=Times, Events=Events, beta=beta)
-        }
-    ''')
+        ''')
     f_beta_time_event = coxConc(df_train, df_test)
     f_beta = np.squeeze(f_beta_time_event[0])
     Times = f_beta_time_event[1]
@@ -273,27 +307,49 @@ def coxPHConcPy(x):
 ################################################################################
 ## Calling bigSurvSGD package and claculate its concordance
 def bigSurvConcPy(x):
-    df_train = x[0]
-    df_test = x[1]
-    strata_size = x[2]
+    import numpy as np
+    import rpy2.robjects as robjects
+    import rpy2.robjects.packages as rpackages
+    from rpy2.robjects import pandas2ri
+    pandas2ri.activate()
+    ## import R's "base" package
+    base = rpackages.importr('base')
+    ## import R's utility package
+    utils = rpackages.importr('utils')
+    ## if 'survival', 'parallel', 'doParallel', 'bigmemory', 'bigSurvSGD', and 'randomForestSRC' are not installed,
+    ## install them by de-commenting below lines:
+    # utils.install_packages('survival')
+    # utils.install_packages('parallel')
+    # utils.install_packages('doParallel')
+    # utils.install_packages('bigmemory')
+    # utils.install_packages('bigSurvSGD')
+    bigSurvSGD = rpackages.importr('bigSurvSGD')
+    survival = rpackages.importr('survival')
+    bigmemory = rpackages.importr('bigmemory')
+    doParallel = rpackages.importr('doParallel')
+    parallel = rpackages.importr('parallel')
+
+    df_train = x[1]
+    df_test = x[2]
+    strata_size = x[0]
 
     bigSurvConc = robjects.r('''
-        # A function to estimate beta and concordance using bigSurvSGD
-        concBigSurvSGD <- function(df_train, df_test, strata_size){
-            for (i in 1:ncol(df_test)){
-                df_test[,i] <- as.numeric(as.character(df_test[,i]))
-                df_train[,i] <- as.numeric(as.character(df_train[,i]))
-            }
-        beta <- bigSurvSGD(formula = Surv(time, status)~., data=df_train, strata.size = strata_size, 
-                            inference.method = "none")$coef 
-        f_beta <- as.matrix(df_test[, -which(!is.na(match(colnames(df_test), c("time", "status"))))]) %*% matrix(beta, ncol=1)
-        orderedIndices <- order(df_test$time, decreasing = F)
-        f_beta = f_beta[orderedIndices] 
-        Times = df_test$time[orderedIndices] 
-        Events = df_test$status[orderedIndices]  
-        list(f_beta=f_beta, Times=Times, Events=Events, beta=beta)        
-    }
-    ''')
+            # A function to estimate beta and concordance using bigSurvSGD
+            concBigSurvSGD <- function(df_train, df_test, strata_size){
+                for (i in 1:ncol(df_test)){
+                    df_test[,i] <- as.numeric(as.character(df_test[,i]))
+                    df_train[,i] <- as.numeric(as.character(df_train[,i]))
+                }
+            beta <- bigSurvSGD(formula = Surv(time, status)~., data=df_train, strata.size = strata_size, 
+                                inference.method = "none")$coef 
+            f_beta <- as.matrix(df_test[, -which(!is.na(match(colnames(df_test), c("time", "status"))))]) %*% matrix(beta, ncol=1)
+            orderedIndices <- order(df_test$time, decreasing = F)
+            f_beta = f_beta[orderedIndices] 
+            Times = df_test$time[orderedIndices] 
+            Events = df_test$status[orderedIndices]  
+            list(f_beta=f_beta, Times=Times, Events=Events, beta=beta)        
+        }
+        ''')
     f_beta_time_event = bigSurvConc(df_train, df_test, strata_size)
     f_beta = np.squeeze(f_beta_time_event[0])
     Times = f_beta_time_event[1]
@@ -307,7 +363,9 @@ def bigSurvConcPy(x):
 ################################################################################
 ## Make the MLP neural network
 def whole_model(inputDim, num_nodes, BATCH_NORM, ACTIVATION, DROPOUT):
+    import tensorflow as tf
     inputs = tf.keras.Input(shape=(inputDim))
+
     x = tf.keras.layers.Dense(num_nodes[0], input_dim=inputDim,
                               kernel_initializer='uniform')(inputs)
     if BATCH_NORM:
@@ -337,6 +395,7 @@ def whole_model(inputDim, num_nodes, BATCH_NORM, ACTIVATION, DROPOUT):
 
 ################################################################################
 def eval(x, y, mnist_model):
+    import numpy as np
     batch_size = 1
     strata_size = 2
     f_beta = np.zeros((len(y)), dtype="float16")
@@ -360,6 +419,7 @@ def eval(x, y, mnist_model):
 ################################################################################
 ## Calculate testing concordance index using estimated risk score
 def calc_conc(f_beta, Timess, Eventss):
+    import numpy as np
     orderedIndices = np.argsort(Timess)
     Eventss = np.array(Eventss)[orderedIndices]
     f_beta = np.array(f_beta)[orderedIndices]
@@ -421,12 +481,12 @@ def calc_conc(f_beta, Timess, Eventss):
     return conc_Bin / k
 
 
-
 ################################################################################
 
 
 ################################################################################
 def concDisc(surv, Times, Events):
+    import numpy as np
     times = list(np.array(surv.head(n=len(surv)).index, dtype="float64"))
     columns = list(surv.columns)
     median_surv_time = np.array([np.interp(0.5, xp=np.flip(np.array(surv[columns[i]], dtype="float64")),
@@ -440,6 +500,7 @@ def concDisc(surv, Times, Events):
 
 
 def concCont(surv, Times, Events):
+    import numpy as np
     times = list(np.array(surv.head(n=len(surv)).index, dtype="float64"))
     columns = list(surv.columns)
     median_surv_time = np.array([np.interp(0.5, xp=np.flip(np.array(surv[columns[i]], dtype="float64")),
@@ -455,17 +516,28 @@ def concCont(surv, Times, Events):
 ################################################################################
 ## train the model using mini-batches of pair of patients
 def train_step(image1, image2, mnist_model, optimizer):
+    import tensorflow as tf
+    import numpy as np
+
     with tf.GradientTape() as tape:
         outs = mnist_model([image1, image2], training=True)
-        loss_all = loss_object(outs[1] - outs[0])
-        conc1 = np.nanmean(np.exp(-loss_all))
-        grads = tape.gradient(loss_all, mnist_model.trainable_variables)
+        loss_all = loss_object([outs[0], outs[1]])
+        loss_value = tf.keras.backend.mean(loss_all, axis=0, keepdims=True)
+        conc = np.exp(-loss_value)
+        grads = tape.gradient(loss_value, mnist_model.trainable_variables)
         optimizer.apply_gradients(zip(grads, mnist_model.trainable_variables))
-    return (conc1)
+    return (conc)
 
 
-def loss_object(outDiff):
-    return (tf.keras.backend.log(1 + tf.keras.backend.exp(outDiff)))
+################################################################################
+
+
+################################################################################
+## Customized smoothed concordence index
+def loss_object(outs):
+    import tensorflow as tf
+    return (-tf.keras.backend.log(
+        tf.keras.backend.exp(outs[0]) / (tf.keras.backend.exp(outs[0]) + tf.keras.backend.exp(outs[1]))))
 
 
 ################################################################################
@@ -474,6 +546,7 @@ def loss_object(outDiff):
 ################################################################################
 ## The main fucntion to read data and train network
 def bigSurvSGDMLP(x):
+    import numpy as np
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
@@ -490,19 +563,12 @@ def bigSurvSGDMLP(x):
     x_train = x[13]
     df_valid = x[14]
     x_valid = x[15]
-    if return_conc == 'valid':
-        df_test = x[14]
-        x_test = x[15]
-    else:
-        df_test = x[16]
-        x_test = x[17]
+
+    import tensorflow as tf
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=LR, amsgrad=True)
-    x_test = np.expand_dims(x_test, axis=2)
     x_valid = np.expand_dims(x_valid, axis=2)
-
-    times_test = df_test['time'].to_numpy(dtype="float64")
-    events_test = df_test['status'].to_numpy(dtype="int64")
+    x_train = np.expand_dims(x_train, axis=2)
 
     times_valid = df_valid['time'].to_numpy(dtype="float64")
     events_valid = df_valid['status'].to_numpy(dtype="int64")
@@ -510,15 +576,12 @@ def bigSurvSGDMLP(x):
     times_train = df_train['time'].to_numpy(dtype="float64")
     events_train = df_train['status'].to_numpy(dtype="int64")
 
-    inputDim = x_trainCV.shape[1]
-    indices_test = np.arange(0, len(times_test))
+    inputDim = x_train.shape[1]
     indices_train = np.arange(0, len(times_train))
     indices_valid = np.arange(0, len(times_valid))
     # Initialize model
     mnist_model = whole_model(inputDim, num_nodes, BATCH_NORM, ACTIVATION, DROPOUT)
-    conc_test = []
     conc_valid = []
-    f_beta_test_all = []
     conc_trainAll = []
 
     for i_e in range(epochs):
@@ -539,8 +602,8 @@ def bigSurvSGDMLP(x):
             for b in range(np.int(np.floor(indices.shape[0] / batch_size))):
                 Index1 = indices[(b * batch_size):((b + 1) * batch_size), 0]
                 Index2 = indices[(b * batch_size):((b + 1) * batch_size), 1]
-                results = train_step(x_train[Index1, :],
-                                     x_train[Index2, :],
+                results = train_step(x_train[Index1, :,:],
+                                     x_train[Index2, :,:],
                                      mnist_model, optimizer)
             conc_train.append(results)
         ## consider the remaining strata that are not a complete batch
@@ -549,133 +612,171 @@ def bigSurvSGDMLP(x):
                               np.int(np.floor(indices.shape[0] / batch_size))):indices.shape[0], 0]
             Index2 = indices[(batch_size *
                               np.int(np.floor(indices.shape[0] / batch_size))):indices.shape[0], 1]
-            results = train_step(x_train[Index1, :],
-                                 x_train[Index2, :],
+            results = train_step(x_train[Index1, :, :],
+                                 x_train[Index2, :, :],
                                  mnist_model, optimizer)
             conc_train.append(results)
         conc_trainAll.append(np.nanmean(conc_train))
-
-        if (i_e + 1) % epoch_test == 0:
-            f_beta_valid = eval(x_valid, indices_valid, mnist_model)
-            conc_valid.append(calc_conc(f_beta_valid, times_valid, events_valid))
-
-            if return_conc == "test":
-                f_beta_test = eval(x_test, indices_test, mnist_model)
-                f_beta_test_all.append(f_beta_test)
-                conc_test.append(calc_conc(f_beta_test, times_test, events_test))
-            if (if_early_stop & (i_e > (Patience * epoch_test))):
-                conc_validMA = np.empty((len(conc_valid)))
-                conc_validMA[:] = np.nan
-                conc_validMA[0] = conc_valid[0]
-                for k in range(1, len(conc_valid)):
-                    weights = np.power(0.8, k - np.arange(k + 1))
-                    conc_validMA[k] = np.ma.average(conc_valid[0:(k + 1)], weights=weights)
-                if np.prod(conc_validMA[len(conc_validMA) - 1] <
-                           conc_validMA[(len(conc_validMA) - Patience - 1):(len(conc_validMA) - 1)]):
-                    break
-    if return_conc == "test":
-        conc_return = conc_test[np.nanargmax(conc_valid)]
-    else:
+        #print("training conc: ", np.mean(conc_trainAll))
+        if return_conc == 'valid':
+            if (i_e + 1) % epoch_test == 0:
+                f_beta_valid = eval(x_valid, indices_valid, mnist_model)
+                conc_valid.append(calc_conc(f_beta_valid, times_valid, events_valid))
+                if (if_early_stop & (i_e > (Patience * epoch_test))):
+                    conc_validMA = np.empty((len(conc_valid)))
+                    conc_validMA[:] = np.nan
+                    conc_validMA[0] = conc_valid[0]
+                    for k in range(1, len(conc_valid)):
+                        weights = np.power(0.8, k - np.arange(k + 1))
+                        conc_validMA[k] = np.ma.average(conc_valid[0:(k + 1)], weights=weights)
+                    if np.prod(conc_validMA[len(conc_validMA) - 1] <
+                               conc_validMA[(len(conc_validMA) - Patience - 1):(len(conc_validMA) - 1)]):
+                        break
+        #print("validation conc: ", np.mean(conc_valid))
+    if return_conc == 'valid':
         conc_return = np.nanmax(conc_valid)
-    return conc_return
+        optEpoch = np.nanargmax(conc_valid)
+        return [conc_return, (optEpoch+1)*epoch_test]
+    else:
+        f_beta_valid = eval(x_valid, indices_valid, mnist_model)
+        return calc_conc(f_beta_valid, times_valid, events_valid)
 
 
 ################################################################################
-
 
 
 ################################################################################
 ## CoxCC method
 def CoxCC_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
+    epochs = x[5]
+    if_early_stop = x[6]
     Patience = x[7]
     return_conc = x[8]
     df_train = x[9]
     x_train = x[10]
     df_valid = x[11]
     x_valid = x[12]
-    if return_conc == 'valid':
-        df_test = x[11]
-        x_test = x[12]
-    else:
-        df_test = x[13]
-        x_test = x[14]
+
 
     out_features = 1
-    output_bias = False
-    verbose = False
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = get_target(df_train)
     y_val = get_target(df_valid)
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     val = tt.tuplefy(x_valid, y_val)
     in_features = x_train.shape[1]
     net = tt.practical.MLPVanilla(in_features, num_nodes, out_features,
                                   BATCH_NORM, DROPOUT, output_bias=False)
     model_CoxCC = Pycox.models.CoxCC(net, tt.optim.Adam)
     model_CoxCC.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_CoxCC.fit(x_train, y_train, batch_size, epochs, callbacks, verbose,
-                          val_data=val.repeat(10).cat())
-    _ = model_CoxCC.compute_baseline_hazards()
-    surv = model_CoxCC.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_CoxCC.fit(x_train, y_train, batch_size, epochs=epochs,
+                                  callbacks=callbacks, verbose=False,
+                                  val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_CoxCC.fit(x_train, y_train, batch_size, epochs, verbose=False,
+                              val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs+1])
+    else:
+        log = model_CoxCC.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        _ = model_CoxCC.compute_baseline_hazards()
+        surv = model_CoxCC.predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
-
 
 
 ################################################################################
 ## DeepSurv method
 def DeepSurv_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
+    epochs = x[5]
+    if_early_stop = x[6]
     Patience = x[7]
     return_conc = x[8]
     df_train = x[9]
     x_train = x[10]
     df_valid = x[11]
     x_valid = x[12]
-    if return_conc == 'valid':
-        df_test = x[11]
-        x_test = x[12]
-    else:
-        df_test = x[13]
-        x_test = x[14]
 
+    out_features = 1
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = get_target(df_train)
     y_val = get_target(df_valid)
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     val = tt.tuplefy(x_valid, y_val)
     in_features = x_train.shape[1]
-
-    out_features = 1
-    output_bias = False
-    verbose = False
-    net = tt.practical.MLPVanilla(in_features, num_nodes, out_features, BATCH_NORM,
-                                  DROPOUT, output_bias=output_bias)
+    net = tt.practical.MLPVanilla(in_features, num_nodes, out_features,
+                                  BATCH_NORM, DROPOUT, output_bias=False)
     model_DeepSurv = Pycox.models.CoxPH(net, tt.optim.Adam)
     model_DeepSurv.optimizer.set_lr(LR)
 
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_DeepSurv.fit(x_train, y_train, batch_size, epochs, callbacks, verbose,
-                             val_data=val, val_batch_size=batch_size)
-    _ = model_DeepSurv.compute_baseline_hazards()
-    surv = model_DeepSurv.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_DeepSurv.fit(x_train, y_train, batch_size, epochs=epochs,
+                            callbacks=callbacks, verbose=False,
+                            val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_DeepSurv.fit(x_train, y_train, batch_size, epochs, verbose=False,
+                              val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs + 1])
+    else:
+        log = model_DeepSurv.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        _ = model_DeepSurv.compute_baseline_hazards()
+        surv = model_DeepSurv.predict_surv_df(x_test)
+
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
@@ -684,80 +785,97 @@ def DeepSurv_met(x):
 ################################################################################
 ## CoxTime method
 def CoxTime_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
+    epochs = x[5]
+    if_early_stop = x[6]
     Patience = x[7]
     return_conc = x[8]
     df_train = x[9]
     x_train = x[10]
     df_valid = x[11]
     x_valid = x[12]
-    if return_conc == 'valid':
-        df_test = x[11]
-        x_test = x[12]
-    else:
-        df_test = x[13]
-        x_test = x[14]
-    verbose = False
+
     labtrans_CoxTime = Pycox.models.CoxTime.label_transform()
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = labtrans_CoxTime.fit_transform(*get_target(df_train))
     y_val = labtrans_CoxTime.transform(*get_target(df_valid))
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     val = tt.tuplefy(x_valid, y_val)
     in_features = x_train.shape[1]
     net = Pycox.models.cox_time.MLPVanillaCoxTime(in_features=in_features, num_nodes=num_nodes, batch_norm=BATCH_NORM,
                                                   dropout=DROPOUT)
     model_CoxTime = Pycox.models.CoxTime(net, tt.optim.Adam, labtrans=labtrans_CoxTime)
     model_CoxTime.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_CoxTime.fit(x_train, y_train, batch_size, epochs, callbacks,
-                            verbose=verbose, val_data=val.repeat(10).cat())
-    _ = model_CoxTime.compute_baseline_hazards()
-    surv = model_CoxTime.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_CoxTime.fit(x_train, y_train, batch_size, epochs=epochs,
+                                    callbacks=callbacks,
+                                    verbose=False, val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_CoxTime.fit(x_train, y_train, batch_size, epochs,
+                                    verbose=False, val_data=val.repeat(10).cat())
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs + 1])
+    else:
+        log = model_CoxTime.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        _ = model_CoxTime.compute_baseline_hazards()
+        surv = model_CoxTime.predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
 ## DeepHit method
 def DeepHit_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
-    Patience = x[7]
-    num_durations = x[8]
+    epochs = x[5]
+    num_durations = x[6]
+    if_early_stop = x[7]
+    Patience = x[8]
     return_conc = x[9]
     df_train = x[10]
     x_train = x[11]
     df_valid = x[12]
     x_valid = x[13]
 
-    if return_conc == 'valid':
-        df_test = x[12]
-        x_test = x[13]
-    else:
-        df_test = x[14]
-        x_test = x[15]
-
-    verbose = False
 
     labtrans_DeepHit = Pycox.models.DeepHitSingle.label_transform(num_durations)
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = labtrans_DeepHit.fit_transform(*get_target(df_train))
     y_val = labtrans_DeepHit.transform(*get_target(df_valid))
-    train = (x_train, y_train)
     val = (x_valid, y_val)
     # We don't need to transform the test labels
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     in_features = x_train.shape[1]
     out_features = labtrans_DeepHit.out_features
 
@@ -767,11 +885,34 @@ def DeepHit_met(x):
     model_DeepHit = Pycox.models.DeepHitSingle(net, tt.optim.Adam, alpha=0.2, sigma=0.1,
                                                duration_index=labtrans_DeepHit.cuts)
     model_DeepHit.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_DeepHit.fit(x_train, y_train, batch_size, epochs, callbacks,
-                            val_data=val, verbose=verbose)
-    surv = model_DeepHit.interpolate(10).predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_DeepHit.fit(x_train, y_train, batch_size,epochs=epochs,
+                                    callbacks=callbacks, val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_DeepHit.fit(x_train, y_train, batch_size, epochs,
+                                    val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs + 1])
+    else:
+        log = model_DeepHit.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        surv = model_DeepHit.interpolate(10).predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
@@ -780,49 +921,66 @@ def DeepHit_met(x):
 ################################################################################
 ## MTLR method
 def MTLR_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
-    Patience = x[7]
-    num_durations = x[8]
+    epochs = x[5]
+    num_durations = x[6]
+    if_early_stop = x[7]
+    Patience = x[8]
     return_conc = x[9]
     df_train = x[10]
     x_train = x[11]
     df_valid = x[12]
     x_valid = x[13]
 
-    if return_conc == 'valid':
-        df_test = x[12]
-        x_test = x[13]
-    else:
-        df_test = x[14]
-        x_test = x[15]
-
-    verbose = False
-
     labtrans_MTLR = Pycox.models.MTLR.label_transform(num_durations)
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = labtrans_MTLR.fit_transform(*get_target(df_train))
     y_val = labtrans_MTLR.transform(*get_target(df_valid))
-    train = (x_train, y_train)
     val = (x_valid, y_val)
     # We don't need to transform the test labels
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     in_features = x_train.shape[1]
     out_features = labtrans_MTLR.out_features
     net = tt.practical.MLPVanilla(in_features=in_features, num_nodes=num_nodes, out_features=out_features,
                                   batch_norm=BATCH_NORM, dropout=DROPOUT)
     model_MTLR = Pycox.models.MTLR(net, tt.optim.Adam, duration_index=labtrans_MTLR.cuts)
     model_MTLR.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_MTLR.fit(x_train, y_train, batch_size, epochs, callbacks,
-                         val_data=val, verbose=verbose)
-    surv = model_MTLR.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_MTLR.fit(x_train, y_train, batch_size, epochs=epochs,
+                                 callbacks=callbacks, val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_MTLR.fit(x_train, y_train, batch_size, epochs,
+                                 val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs+1])
+    else:
+        log = model_MTLR.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        surv = model_MTLR.predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
@@ -831,401 +989,670 @@ def MTLR_met(x):
 ################################################################################
 ## PCHazard method
 def PCHazard_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
-    Patience = x[7]
-    num_durations = x[8]
+    epochs = x[5]
+    num_durations = x[6]
+    if_early_stop = x[7]
+    Patience = x[8]
     return_conc = x[9]
     df_train = x[10]
     x_train = x[11]
     df_valid = x[12]
     x_valid = x[13]
-
-    if return_conc == 'valid':
-        df_test = x[12]
-        x_test = x[13]
-    else:
-        df_test = x[14]
-        x_test = x[15]
-
-    verbose = False
 
     labtrans_PCHazard = Pycox.models.PCHazard.label_transform(num_durations)
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = labtrans_PCHazard.fit_transform(*get_target(df_train))
     y_val = labtrans_PCHazard.transform(*get_target(df_valid))
     val = (x_valid, y_val)
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     in_features = x_train.shape[1]
     out_features = labtrans_PCHazard.out_features
     net = tt.practical.MLPVanilla(in_features=in_features, num_nodes=num_nodes, out_features=out_features,
                                   batch_norm=BATCH_NORM, dropout=DROPOUT)
     model_PCHazard = Pycox.models.PCHazard(net, tt.optim.Adam, duration_index=labtrans_PCHazard.cuts)
     model_PCHazard.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_PCHazard.fit(x_train, y_train, batch_size, epochs,
-                             callbacks, val_data=val, verbose=verbose)
-    model_PCHazard.sub = 10
-    surv = model_PCHazard.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_PCHazard.fit(x_train, y_train, batch_size, epochs=epochs,
+                                     callbacks=callbacks, val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_PCHazard.fit(x_train, y_train, batch_size, epochs,
+                                     val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs+1])
+    else:
+        log = model_PCHazard.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        model_PCHazard.sub = 10
+        surv = model_PCHazard.predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
 
 
 ################################################################################
-## PCHazard method
+## PMF method
 def PMF_met(x):
+    import pycox as Pycox
+    import torchtuples as tt
+    import numpy as np
+
     batch_size = x[0]
     DROPOUT = x[1]
     LR = x[2]
     num_nodes = x[3]
     BATCH_NORM = x[4]
-    ACTIVATION = x[5]
-    epochs = x[6]
-    Patience = x[7]
-    num_durations = x[8]
+    epochs = x[5]
+    num_durations = x[6]
+    if_early_stop = x[7]
+    Patience = x[8]
     return_conc = x[9]
     df_train = x[10]
     x_train = x[11]
     df_valid = x[12]
     x_valid = x[13]
 
-    if return_conc == 'valid':
-        df_test = x[12]
-        x_test = x[13]
-    else:
-        df_test = x[14]
-        x_test = x[15]
-
-    verbose = False
-
     labtrans_PMF = Pycox.models.PMF.label_transform(num_durations)
     get_target = lambda df: (df['time'].values, df['status'].values)
     y_train = labtrans_PMF.fit_transform(*get_target(df_train))
     y_val = labtrans_PMF.transform(*get_target(df_valid))
     val = (x_valid, y_val)
-    durations_test, events_test = get_target(df_test)
+    durations_valid, events_valid = get_target(df_valid)
     in_features = x_train.shape[1]
     out_features = labtrans_PMF.out_features
     net = tt.practical.MLPVanilla(in_features=in_features, num_nodes=num_nodes, out_features=out_features,
                                   batch_norm=BATCH_NORM, dropout=DROPOUT)
     model_PMF = Pycox.models.PMF(net, tt.optim.Adam, duration_index=labtrans_PMF.cuts)
     model_PMF.optimizer.set_lr(LR)
-    callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
-    log = model_PMF.fit(x_train, y_train, batch_size, epochs, callbacks,
-                        val_data=val, verbose=verbose)
-    surv = model_PMF.predict_surv_df(x_test)
-    return (concDisc(surv, np.array(durations_test), np.array(events_test)))
+
+
+    if return_conc == 'valid':
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model_PMF.fit(x_train, y_train, batch_size, epochs=epochs,
+                                callbacks=callbacks, val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        else:
+            log = model_PMF.fit(x_train, y_train, batch_size, epochs,
+                                val_data=val, verbose=False)
+            try:
+                val_loss_epochs = log.to_pandas()['val_loss']
+                optEpochs = np.nanargmin(val_loss_epochs)
+                optValLoss = np.nanmin(val_loss_epochs)
+            except:
+                optEpochs = np.nan
+                optValLoss = np.nan
+        return ([optValLoss, optEpochs+1])
+    else:
+        log = model_PMF.fit(x_train, y_train, batch_size, epochs, verbose=False)
+        surv = model_PMF.predict_surv_df(x_test)
+        return (concDisc(surv, np.array(durations_valid), np.array(events_valid)))
 
 
 ################################################################################
 
 
-
 ################################################################################
-## Load the tabular dataset
-df_all, x_all = initializer_Data(Data)
+## Multi-processing through multiprocessing packsge to speedup the analysis
+if __name__ == '__main__':
+    # Load required packages
+    tf, mp, np, time, sklearn, random, os, StandardScaler, DataFrameMapper, tt, pd, Pycox = initializer_modules()
+    datas = ['flchain', 'metabric', 'gbsg', 'nwtco', 'support']
+    num_data = len(datas)
+    # Initialize a numpy array for saving results
+    allConc_coxph = np.empty((num_data, num_rep), dtype="float64")
+    allConc_coxph[:] = np.nan
+    allTime_coxph = np.empty((num_data, num_rep), dtype="float64")
+    allTime_coxph[:] = np.nan
+
+    allConc_bigSurvSGDs2 = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvSGDs2[:] = np.nan
+    allTime_bigSurvSGDs2 = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvSGDs2[:] = np.nan
+
+    allConc_bigSurvSGDs5 = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvSGDs5[:] = np.nan
+    allTime_bigSurvSGDs5 = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvSGDs5[:] = np.nan
+
+    allConc_bigSurvSGDs10 = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvSGDs10[:] = np.nan
+    allTime_bigSurvSGDs10 = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvSGDs10[:] = np.nan
+
+    allConc_bigSurvSGDs20 = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvSGDs20[:] = np.nan
+    allTime_bigSurvSGDs20 = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvSGDs20[:] = np.nan
+
+    allConc_bigSurvSGDs50 = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvSGDs50[:] = np.nan
+    allTime_bigSurvSGDs50 = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvSGDs50[:] = np.nan
+
+    allConc_bigSurvMLP = np.empty((num_data, num_rep), dtype="float64")
+    allConc_bigSurvMLP[:] = np.nan
+    allTime_bigSurvMLP = np.empty((num_data, num_rep), dtype="float64")
+    allTime_bigSurvMLP[:] = 0.0
+
+    allConc_RSF = np.empty((num_data, num_rep), dtype="float64")
+    allConc_RSF[:] = np.nan
+    allTime_RSF = np.empty((num_data, num_rep), dtype="float64")
+    allTime_RSF[:] = 0.0
+
+    allConc_CoxCC = np.empty((num_data, num_rep), dtype="float64")
+    allConc_CoxCC[:] = np.nan
+    allTime_CoxCC = np.empty((num_data, num_rep), dtype="float64")
+    allTime_CoxCC[:] = 0.0
+
+    allConc_CoxTime = np.empty((num_data, num_rep), dtype="float64")
+    allConc_CoxTime[:] = np.nan
+    allTime_CoxTime = np.empty((num_data, num_rep), dtype="float64")
+    allTime_CoxTime[:] = 0.0
+
+    allConc_DeepSurv = np.empty((num_data, num_rep), dtype="float64")
+    allConc_DeepSurv[:] = np.nan
+    allTime_DeepSurv = np.empty((num_data, num_rep), dtype="float64")
+    allTime_DeepSurv[:] = 0.0
+
+    allConc_DeepHit = np.empty((num_data, num_rep), dtype="float64")
+    allConc_DeepHit[:] = np.nan
+    allTime_DeepHit = np.empty((num_data, num_rep), dtype="float64")
+    allTime_DeepHit[:] = 0.0
+
+    allConc_MTLR = np.empty((num_data, num_rep), dtype="float64")
+    allConc_MTLR[:] = np.nan
+    allTime_MTLR = np.empty((num_data, num_rep), dtype="float64")
+    allTime_MTLR[:] = 0.0
+
+    allConc_PMF = np.empty((num_data, num_rep), dtype="float64")
+    allConc_PMF[:] = np.nan
+    allTime_PMF = np.empty((num_data, num_rep), dtype="float64")
+    allTime_PMF[:] = 0.0
+
+    allConc_PCHazard = np.empty((num_data, num_rep), dtype="float64")
+    allConc_PCHazard[:] = np.nan
+    allTime_PCHazard = np.empty((num_data, num_rep), dtype="float64")
+    allTime_PCHazard[:] = 0.0
+
+    # A for loop for a single split of training/testing data
+    for i_rep in range(num_rep):
+        print("======================================")
+        print(i_rep+1)
+        print("======================================")
+        # import modules
+        hyperParams_RSF, hyperParams_BigSurv, hyperParams_BigSurvMLP, \
+        hyperParams_Cont, hyperParams_Disc = initializer_params()
+
+        for i_data in range(len(datas)):
+            Data = datas[i_data]
+            print("======================================")
+            print('Rep: ', i_rep + 1)
+            print('Data: ', Data)
+            print("======================================")
+            # load data
+            df_all, x_all = initializer_Data(Data, Pycox, pd, StandardScaler, DataFrameMapper)
+            # divide data into training and testing
+            seed_num = 10000 * (i_rep+startRep)
+            np.random.seed(seed_num)
+            indexTrain = np.arange(0, x_all.shape[0])
+            indexTest = np.random.choice(indexTrain, size=np.int(np.floor(0.2 * len(indexTrain))), replace=False)
+            indexTrain = np.setdiff1d(indexTrain, indexTest)
+            df_train = df_all.loc[indexTrain]
+            df_test = df_all.loc[indexTest]
+            x_train = x_all[indexTrain, :]
+            x_test = x_all[indexTest, :]
+
+            allConc_RSF_hyper = np.empty((num_folds, len(hyperParams_RSF)), dtype="float64")
+            allConc_RSF_hyper[:] = np.nan
+
+            allConc_bigSurvMLP_hyper = np.empty((num_folds, len(hyperParams_BigSurvMLP)), dtype="float64")
+            allConc_bigSurvMLP_hyper[:] = np.nan
+            allEpoch_bigSurvMLP_hyper = np.empty((num_folds, len(hyperParams_BigSurvMLP)), dtype="float64")
+            allEpoch_bigSurvMLP_hyper[:] = np.nan
+
+            allConc_CoxCC_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allConc_CoxCC_hyper[:] = np.nan
+            allEpoch_CoxCC_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allEpoch_CoxCC_hyper[:] = np.nan
+
+            allConc_CoxTime_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allConc_CoxTime_hyper[:] = np.nan
+            allEpoch_CoxTime_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allEpoch_CoxTime_hyper[:] = np.nan
+
+            allConc_DeepSurv_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allConc_DeepSurv_hyper[:] = np.nan
+            allEpoch_DeepSurv_hyper = np.empty((num_folds, len(hyperParams_Cont)), dtype="float64")
+            allEpoch_DeepSurv_hyper[:] = np.nan
+
+            allConc_DeepHit_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allConc_DeepHit_hyper[:] = np.nan
+            allEpoch_DeepHit_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allEpoch_DeepHit_hyper[:] = np.nan
+
+            allConc_MTLR_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allConc_MTLR_hyper[:] = np.nan
+            allEpoch_MTLR_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allEpoch_MTLR_hyper[:] = np.nan
+
+            allConc_PMF_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allConc_PMF_hyper[:] = np.nan
+            allEpoch_PMF_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allEpoch_PMF_hyper[:] = np.nan
+
+            allConc_PCHazard_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allConc_PCHazard_hyper[:] = np.nan
+            allEpoch_PCHazard_hyper = np.empty((num_folds, len(hyperParams_Disc)), dtype="float64")
+            allEpoch_PCHazard_hyper[:] = np.nan
+
+            # coxph
+            start_time = time.time()
+            allConc_coxph[i_data, i_rep] = coxPHConcPy([df_train, df_test])
+            allTime_coxph[i_data, i_rep] = time.time() - start_time
+            print('conc for coxph and data ' + Data + ' : ', allConc_coxph[i_data, i_rep])
+            print('time for coxph and data ' + Data + ' : ', allTime_coxph[i_data, i_rep])
+
+            # bigSurvSGD with different starta_size
+            # s=2
+            start_time = time.time()
+            allConc_bigSurvSGDs2[i_data, i_rep] = bigSurvConcPy([2, df_train, df_test])
+            allTime_bigSurvSGDs2[i_data, i_rep] = time.time() - start_time
+            print('conc for bigSurvSGDs2 and data ' + Data + ' : ', allConc_bigSurvSGDs2[i_data, i_rep])
+            print('time for bigSurvSGDs2 and data ' + Data + ' : ', allTime_bigSurvSGDs2[i_data, i_rep])
+
+            # s=5
+            start_time = time.time()
+            allConc_bigSurvSGDs5[i_data, i_rep] = bigSurvConcPy([5, df_train, df_test])
+            allTime_bigSurvSGDs5[i_data, i_rep] = time.time() - start_time
+            print('conc for bigSurvSGDs5 and data ' + Data + ' : ', allConc_bigSurvSGDs5[i_data, i_rep])
+            print('time for bigSurvSGDs5 and data ' + Data + ' : ', allTime_bigSurvSGDs5[i_data, i_rep])
+
+            # s=10
+            start_time = time.time()
+            allConc_bigSurvSGDs10[i_data, i_rep] = bigSurvConcPy([10, df_train, df_test])
+            allTime_bigSurvSGDs10[i_data, i_rep] = time.time() - start_time
+            print('conc for bigSurvSGDs10 and data ' + Data + ' : ', allConc_bigSurvSGDs10[i_data, i_rep])
+            print('time for bigSurvSGDs10 and data ' + Data + ' : ', allTime_bigSurvSGDs10[i_data, i_rep])
+
+            # s=20
+            start_time = time.time()
+            allConc_bigSurvSGDs20[i_data, i_rep] = bigSurvConcPy([20, df_train, df_test])
+            allTime_bigSurvSGDs20[i_data, i_rep] = time.time() - start_time
+            print('conc for bigSurvSGDs20 and data ' + Data + ' : ', allConc_bigSurvSGDs20[i_data, i_rep])
+            print('time for bigSurvSGDs20 and data ' + Data + ' : ', allTime_bigSurvSGDs20[i_data, i_rep])
+
+            # s=50
+            start_time = time.time()
+            allConc_bigSurvSGDs50[i_data, i_rep] = bigSurvConcPy([50, df_train, df_test])
+            allTime_bigSurvSGDs50[i_data, i_rep] = time.time() - start_time
+            print('conc for bigSurvSGDs50 and data ' + Data + ' : ', allConc_bigSurvSGDs50[i_data, i_rep])
+            print('time for bigSurvSGDs50 and data ' + Data + ' : ', allTime_bigSurvSGDs50[i_data, i_rep])
+            ## Indices for k-fold CV
+            indices_fold = np.random.choice(len(indexTrain),
+                                            size=np.int(num_folds * np.floor(len(indexTrain) / num_folds)),
+                                            replace=False, p=None)
+            indices_fold_mat = indices_fold.reshape(np.int(np.floor(len(indexTrain) / num_folds)),
+                                                    num_folds)
+
+            # Prepare data and hyperparameters for all folds
+            for i_cv in range(num_folds):
+                df_valCV = df_train.iloc[indices_fold_mat[:, i_cv]]
+                df_trainCV = df_train.iloc[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv])]
+                x_valCV = x_train[indices_fold_mat[:, i_cv], :]
+                x_trainCV = x_train[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv]), :]
+
+                hyperParams_RSF_list = []
+                hyperParams_BigSurvMLP_list = []
+                hyperParams_Cont_list = []
+                hyperParams_Disc_list = []
+
+                # hyperparams for RSF
+                for i in range(len(hyperParams_RSF)):
+                    hyperParams_RSF_single = hyperParams_RSF[i].copy()
+                    hyperParams_RSF_single.append(df_trainCV)
+                    hyperParams_RSF_single.append(df_valCV)
+                    hyperParams_RSF_list.append(hyperParams_RSF_single)
+
+                # hyperparams for bigSurvMLP
+                for i in range(len(hyperParams_BigSurvMLP)):
+                    hyperParams_BigSurvMLP_single = hyperParams_BigSurvMLP[i].copy()
+                    hyperParams_BigSurvMLP_single.append('valid')
+                    hyperParams_BigSurvMLP_single.append(df_trainCV)
+                    hyperParams_BigSurvMLP_single.append(x_trainCV)
+                    hyperParams_BigSurvMLP_single.append(df_valCV)
+                    hyperParams_BigSurvMLP_single.append(x_valCV)
+                    hyperParams_BigSurvMLP_list.append(hyperParams_BigSurvMLP_single)
+
+                # hyperparams for continuous methods
+                for i in range(len(hyperParams_Cont)):
+                    hyperParams_Cont_single = hyperParams_Cont[i].copy()
+                    hyperParams_Cont_single.append('valid')
+                    hyperParams_Cont_single.append(df_trainCV)
+                    hyperParams_Cont_single.append(x_trainCV)
+                    hyperParams_Cont_single.append(df_valCV)
+                    hyperParams_Cont_single.append(x_valCV)
+                    hyperParams_Cont_list.append(hyperParams_Cont_single)
+
+                # hyperparams for discrete methods
+                for i in range(len(hyperParams_Disc)):
+                    hyperParams_Disc_single = hyperParams_Disc[i].copy()
+                    hyperParams_Disc_single.append('valid')
+                    hyperParams_Disc_single.append(df_trainCV)
+                    hyperParams_Disc_single.append(x_trainCV)
+                    hyperParams_Disc_single.append(df_valCV)
+                    hyperParams_Disc_single.append(x_valCV)
+                    hyperParams_Disc_list.append(hyperParams_Disc_single)
+
+                ################################################################################
+                # RSF: concordance over folds and hyperparams
+
+                start_time = time.time()
+                p_RSF = mp.Pool()
+                results_RSF_mp = p_RSF.map(rsfConcPy, hyperParams_RSF_list)
+                p_RSF.close()
+                allTime_RSF[i_data, i_rep] += time.time()-start_time
+                allConc_RSF_hyper[i_cv, :] = np.squeeze(np.array(results_RSF_mp))
+
+                ################################################################################
+                # bigSurvMLP: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(bigSurvSGDMLP, hyperParams_BigSurvMLP_list)
+                p.close()
+                allTime_bigSurvMLP[i_data, i_rep] += time.time() - start_time
+
+                allConc_bigSurvMLP_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_bigSurvMLP_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # CoxCC: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(CoxCC_met, hyperParams_Cont_list)
+                p.close()
+                allTime_CoxCC[i_data, i_rep] += time.time() - start_time
+
+                allConc_CoxCC_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_CoxCC_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # DeepSurv: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(DeepSurv_met, hyperParams_Cont_list)
+                p.close()
+                allTime_DeepSurv[i_data, i_rep] += time.time() - start_time
+
+                allConc_DeepSurv_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_DeepSurv_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # CoxTime: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(CoxTime_met, hyperParams_Cont_list)
+                p.close()
+                allTime_CoxTime[i_data, i_rep] += time.time() - start_time
+
+                allConc_CoxTime_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_CoxTime_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # DeepHit: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(DeepHit_met, hyperParams_Disc_list)
+                p.close()
+                allTime_DeepHit[i_data, i_rep] += time.time() - start_time
+
+                allConc_DeepHit_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_DeepHit_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+                ################################################################################
+                # MTLR: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(MTLR_met, hyperParams_Disc_list)
+                p.close()
+                allTime_MTLR[i_data, i_rep] += time.time() - start_time
+
+                allConc_MTLR_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_MTLR_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # PCHazard: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(PCHazard_met, hyperParams_Disc_list)
+                p.close()
+                allTime_PCHazard[i_data, i_rep] += time.time() - start_time
+
+                allConc_PCHazard_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_PCHazard_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+                ################################################################################
+                # PMF: concordance over folds and hyperparams
+                start_time = time.time()
+                p = mp.Pool()
+                results_mp = p.map(PMF_met, hyperParams_Disc_list)
+                p.close()
+                allTime_PMF[i_data, i_rep] += time.time() - start_time
+
+                allConc_PMF_hyper[i_cv, :] = np.array([item[0] for item in results_mp])
+                allEpoch_PMF_hyper[i_cv, :] = np.array([item[1] for item in results_mp])
+
+            ################################################################################
+            ################################################################################
+
+            # Determine the best set of hyperparameters for for testing RSF
+            best_hyper_index_RSF = np.nanargmax(np.nanmean(allConc_RSF_hyper, axis=0))
+            best_hyper_RSF = hyperParams_RSF_list.copy()[best_hyper_index_RSF]
+            best_hyper_RSF[3] = df_train
+            best_hyper_RSF[4] = df_test
+
+            start_time = time.time()
+            allConc_RSF[i_data, i_rep] = rsfConcPy(best_hyper_RSF)
+            allTime_RSF[i_data, i_rep] += time.time() - start_time
+            print('conc for RSF and data '+ Data + ' : ', allConc_RSF[i_data, i_rep])
+            print('time for RSF and data '+ Data + ' : ', allTime_RSF[i_data, i_rep])
+
+            ################################################################################
+            # Determine the best set of hyperparameters for testing bifSurvMLP
+            best_hyper_index_bigSurvMLP = np.nanargmax(np.nanmean(allConc_bigSurvMLP_hyper, axis=0))
+            best_hyper_bigSurvMLP = hyperParams_BigSurvMLP_list.copy()[best_hyper_index_bigSurvMLP]
+            best_epoch_bigSurvMLP = np.nanmean(allEpoch_bigSurvMLP_hyper, axis=0)[best_hyper_index_bigSurvMLP]
+
+            best_hyper_bigSurvMLP[6] = int(best_epoch_bigSurvMLP)
+            best_hyper_bigSurvMLP[11] = 'test'
+            best_hyper_bigSurvMLP[12] = df_train
+            best_hyper_bigSurvMLP[13] = x_train
+            best_hyper_bigSurvMLP[14] = df_test
+            best_hyper_bigSurvMLP[15] = x_test
+
+            start_time = time.time()
+            allConc_bigSurvMLP[i_data, i_rep] = bigSurvSGDMLP(best_hyper_bigSurvMLP)
+            allTime_bigSurvMLP[i_data, i_rep] += time.time() - start_time
+            print('conc for bigSurvMLP and data '+ Data + ' : ', allConc_bigSurvMLP[i_data, i_rep])
+            print('time for bigSurvMLP and data '+ Data + ' : ', allTime_bigSurvMLP[i_data, i_rep])
+
+            ################################################################################
+            # Determine the best set of hyperparameters for testin CoxCC
+            best_hyper_index_CoxCC = np.nanargmin(np.nanmean(allConc_CoxCC_hyper, axis=0))
+            best_hyper_CoxCC = hyperParams_Cont_list.copy()[best_hyper_index_CoxCC]
+            best_epoch_CoxCC = np.nanmean(allEpoch_CoxCC_hyper, axis=0)[best_hyper_index_CoxCC]
+
+            best_hyper_CoxCC[5] = int(best_epoch_CoxCC)
+            best_hyper_CoxCC[8] = 'test'
+            best_hyper_CoxCC[9] = df_train
+            best_hyper_CoxCC[10] = x_train
+            best_hyper_CoxCC[11] = df_test
+            best_hyper_CoxCC[12] = x_test
+
+            start_time = time.time()
+            allConc_CoxCC[i_data, i_rep] = CoxCC_met(best_hyper_CoxCC)
+            allTime_CoxCC[i_data, i_rep] += time.time() - start_time
+            print('conc for CoxCC and data '+ Data + ' : ', allConc_CoxCC[i_data, i_rep])
+            print('time for CoxCC and data '+ Data + ' : ', allTime_CoxCC[i_data, i_rep])
+
+            ################################################################################
+            # Determine the best set of hyperparameters for testing DeepSurv
+            best_hyper_index_DeepSurv = np.nanargmin(np.nanmean(allConc_DeepSurv_hyper, axis=0))
+            best_hyper_DeepSurv = hyperParams_Cont_list.copy()[best_hyper_index_DeepSurv]
+            best_epoch_DeepSurv = np.nanmean(allEpoch_DeepSurv_hyper, axis=0)[best_hyper_index_DeepSurv]
+
+            best_hyper_DeepSurv[5] = int(best_epoch_DeepSurv)
+            best_hyper_DeepSurv[8] = 'test'
+            best_hyper_DeepSurv[9] = df_train
+            best_hyper_DeepSurv[10] = x_train
+            best_hyper_DeepSurv[11] = df_test
+            best_hyper_DeepSurv[12] = x_test
+
+            start_time = time.time()
+            allConc_DeepSurv[i_data, i_rep] = DeepSurv_met(best_hyper_DeepSurv)
+            allTime_DeepSurv[i_data, i_rep] += time.time() - start_time
+            print('conc for DeepSurv and data '+ Data + ' : ', allConc_DeepSurv[i_data, i_rep])
+            print('time for DeepSurv and data '+ Data + ' : ', allTime_DeepSurv[i_data, i_rep])
 
 
-################################################################################
+            ################################################################################
+            # Determine the best set of hyperparameters for testing CoxTime
+            best_hyper_index_CoxTime = np.nanargmin(np.nanmean(allConc_CoxTime_hyper, axis=0))
+            best_hyper_CoxTime = hyperParams_Cont_list.copy()[best_hyper_index_CoxTime]
+            best_epoch_CoxTime = np.nanmean(allEpoch_CoxTime_hyper, axis=0)[best_hyper_index_CoxTime]
 
+            best_hyper_CoxTime[5] = int(best_epoch_CoxTime)
+            best_hyper_CoxTime[8] = 'test'
+            best_hyper_CoxTime[9] = df_train
+            best_hyper_CoxTime[10] = x_train
+            best_hyper_CoxTime[11] = df_test
+            best_hyper_CoxTime[12] = x_test
 
+            start_time = time.time()
+            allConc_CoxTime[i_data, i_rep] = CoxTime_met(best_hyper_CoxTime)
+            allTime_CoxTime[i_data, i_rep] += time.time() - start_time
+            print('conc for CoxTime and data '+ Data + ' : ', allConc_CoxTime[i_data, i_rep])
+            print('time for CoxTime and data '+ Data + ' : ', allTime_CoxTime[i_data, i_rep])
 
+            ################################################################################
+            # Determine the best set of hyperparameters for testing DeepHit
+            best_hyper_index_DeepHit = np.nanargmin(np.nanmean(allConc_DeepHit_hyper, axis=0))
+            best_hyper_DeepHit = hyperParams_Disc_list.copy()[best_hyper_index_DeepHit]
+            best_epoch_DeepHit = np.nanmean(allEpoch_DeepHit_hyper, axis=0)[best_hyper_index_DeepHit]
 
-################################################################################
-#############################################
-## random splits of training/validation with CV t0 tune hyper-parameters
-conc_RSF_hyper = np.empty((num_rep_hyper, num_folds, len(num_trees), len(num_nodes_rsf), len(m_tries)), dtype="float64")
-conc_RSF_hyper[:] = np.nan
-conc_bigSurvMLP_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_bigSurvMLP_hyper[:] = np.nan
-conc_CoxCC_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_CoxCC_hyper[:] = np.nan
-conc_CoxTime_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_CoxTime_hyper[:] = np.nan
-conc_DeepSurv_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_DeepSurv_hyper[:] = np.nan
-conc_DeepHit_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_DeepHit_hyper[:] = np.nan
-conc_MTLR_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_MTLR_hyper[:] = np.nan
-conc_PMF_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_PMF_hyper[:] = np.nan
-conc_PCHazard_hyper = np.empty((num_rep_hyper, num_folds, len(batch_sizes), len(dropouts), len(LRs)), dtype="float64")
-conc_PCHazard_hyper[:] = np.nan
+            best_hyper_DeepHit[5] = int(best_epoch_DeepHit)
+            best_hyper_DeepHit[9] = 'test'
+            best_hyper_DeepHit[10] = df_train
+            best_hyper_DeepHit[11] = x_train
+            best_hyper_DeepHit[12] = df_test
+            best_hyper_DeepHit[13] = x_test
 
-return_conc = 'valid'
-ma_weight = 0.8
-scheme = 'quantiles'
+            start_time = time.time()
+            allConc_DeepHit[i_data, i_rep] = DeepHit_met(best_hyper_DeepHit)
+            allTime_DeepHit[i_data, i_rep] += time.time() - start_time
+            print('conc for DeepHit and data '+ Data + ' : ', allConc_DeepHit[i_data, i_rep])
+            print('time for DeepHit and data '+ Data + ' : ', allTime_DeepHit[i_data, i_rep])
 
-# methods = ['cox', 'bigSurv', 'RSF', 'bigSurvMLP', 'CoxCC', 'DeepSurv', 'CoxTime', 'DeepHit', 'MTLR', 'PCHazard', 'PMF']
+            ################################################################################
+            # Determine the best set of hyperparameters for testing MTLR
+            best_hyper_index_MTLR = np.nanargmin(np.nanmean(allConc_MTLR_hyper, axis=0))
+            best_hyper_MTLR = hyperParams_Disc_list.copy()[best_hyper_index_MTLR]
+            best_epoch_MTLR = np.nanmean(allEpoch_MTLR_hyper, axis=0)[best_hyper_index_MTLR]
 
-# A for loop for a single split of training/testing data
-for i_rep in range(num_rep_hyper):
-    seed_num = 10000 * i_rep
-    np.random.seed(seed_num)
+            best_hyper_MTLR[5] = int(best_epoch_MTLR)
+            best_hyper_MTLR[9] = 'test'
+            best_hyper_MTLR[10] = df_train
+            best_hyper_MTLR[11] = x_train
+            best_hyper_MTLR[12] = df_test
+            best_hyper_MTLR[13] = x_test
 
-    # divide data into training and testing
-    indexTrain = np.arange(0, x_all.shape[0])
-    indexTest = np.random.choice(indexTrain, size=np.int(np.floor(0.2 * len(indexTrain))), replace=False)
-    indexTrain = np.setdiff1d(indexTrain, indexTest)
-    df_train = df_all.loc[indexTrain]
-    df_test = df_all.loc[indexTest]
-    x_train = x_all[indexTrain, :]
-    x_test = x_all[indexTest, :]
+            start_time = time.time()
+            allConc_MTLR[i_data, i_rep] = MTLR_met(best_hyper_MTLR)
+            allTime_MTLR[i_data, i_rep] += time.time() - start_time
+            print('conc for MTLR and data '+ Data + ' : ', allConc_MTLR[i_data, i_rep])
+            print('time for MTLR and data '+ Data + ' : ', allTime_MTLR[i_data, i_rep])
 
-    # Indices for k-fold CV
-    indices_fold = np.random.choice(len(indexTrain),
-                                    size=np.int(num_folds * np.floor(len(indexTrain) / num_folds)),
-                                    replace=False, p=None)
-    indices_fold_mat = indices_fold.reshape(np.int(np.floor(len(indexTrain) / num_folds)),
-                                            num_folds)
-    for i_cv in range(num_folds):
-        df_valCV = df_train.iloc[indices_fold_mat[:, i_cv]]
-        df_trainCV = df_train.iloc[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv])]
-        x_valCV = x_train[indices_fold_mat[:, i_cv], :]
-        x_trainCV = x_train[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv]), :]
+            ################################################################################
+            # Determine the best set of hyperparameters for testing PCHazard
+            best_hyper_index_PCHazard = np.nanargmin(np.nanmean(allConc_PCHazard_hyper, axis=0))
+            best_hyper_PCHazard = hyperParams_Disc_list.copy()[best_hyper_index_PCHazard]
+            best_epoch_PCHazard = np.nanmean(allEpoch_PCHazard_hyper, axis=0)[best_hyper_index_PCHazard]
 
-        for i_tree in range(len(num_trees)):
-            num_tree = num_trees[i_tree]
-            for i_node in range(len(num_nodes_rsf)):
-                num_node_rsf = num_nodes_rsf[i_node]
-                for i_try in range(len(m_tries)):
-                    num_try = m_tries[i_try]
-                    params = [num_tree, num_node_rsf, num_try, return_conc,
-                              df_trainCV, df_valCV, None]
-                    conc_RSF_hyper[i_rep, i_cv, i_tree, i_node, i_try] = rsfConcPy(params)
+            best_hyper_PCHazard[5] = int(best_epoch_PCHazard)
+            best_hyper_PCHazard[9] = 'test'
+            best_hyper_PCHazard[10] = df_train
+            best_hyper_PCHazard[11] = x_train
+            best_hyper_PCHazard[12] = df_test
+            best_hyper_PCHazard[13] = x_test
 
-        for i_bs in range(len(batch_sizes)):
-            batch_size = batch_sizes[i_bs]
-            for i_dr in range(len(dropouts)):
-                dropout = dropouts[i_dr]
-                for i_lr in range(len(LRs)):
-                    LR = LRs[i_lr]
+            start_time = time.time()
+            allConc_PCHazard[i_data, i_rep] = PCHazard_met(best_hyper_PCHazard)
+            allTime_PCHazard[i_data, i_rep] += time.time() - start_time
+            print('conc for PCHazard and data '+ Data + ' : ', allConc_PCHazard[i_data, i_rep])
+            print('time for PCHazard and data '+ Data + ' : ', allTime_PCHazard[i_data, i_rep])
 
-                    params_bigSurvMLP = [batch_size, dropout, LR, num_nodes,
-                                         BATCH_NORM, ACTIVATION, epochs, strata_size,
-                                         epoch_test, if_early_stop, Patience, return_conc,
-                                         df_trainCV, x_trainCV, df_valCV, x_valCV,
-                                         df_test, x_test]
-                    params_Cont = [batch_size, dropout, LR, num_nodes,
-                                   BATCH_NORM, ACTIVATION, epochs, Patience,
-                                   return_conc, df_trainCV, x_trainCV,
-                                   df_valCV, x_valCV, df_test, x_test]
-                    params_Disc = [batch_size, dropout, LR, num_nodes,
-                                   BATCH_NORM, ACTIVATION, epochs, Patience,
-                                   num_durations, return_conc, df_trainCV,
-                                   x_trainCV, df_valCV, x_valCV, df_test, x_test]
+            ################################################################################
+            # Determine the best set of hyperparameters for testing PMF
+            best_hyper_index_PMF = np.nanargmin(np.nanmean(allConc_PMF_hyper, axis=0))
+            best_hyper_PMF = hyperParams_Disc_list.copy()[best_hyper_index_PMF]
+            best_epoch_PMF = np.nanmean(allEpoch_PMF_hyper, axis=0)[best_hyper_index_PMF]
 
-                    conc_bigSurvMLP_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = bigSurvSGDMLP(params_bigSurvMLP)
-                    conc_CoxCC_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = CoxCC_met(params_Cont)
-                    conc_CoxTime_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = CoxTime_met(params_Cont)
-                    conc_DeepSurv_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = DeepSurv_met(params_Cont)
-                    conc_DeepHit_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = DeepHit_met(params_Disc)
-                    conc_MTLR_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = MTLR_met(params_Disc)
-                    conc_PMF_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = PMF_met(params_Disc)
-                    conc_PCHazard_hyper[i_rep, i_cv, i_bs, i_dr, i_lr] = PCHazard_met(params_Disc)
+            best_hyper_PMF[5] = int(best_epoch_PMF)
+            best_hyper_PMF[9] = 'test'
+            best_hyper_PMF[10] = df_train
+            best_hyper_PMF[11] = x_train
+            best_hyper_PMF[12] = df_test
+            best_hyper_PMF[13] = x_test
 
+            start_time = time.time()
+            allConc_PMF[i_data, i_rep] = PMF_met(best_hyper_PMF)
+            allTime_PMF[i_data, i_rep] += time.time() - start_time
+            print('conc for PMF and data '+ Data + ' : ', allConc_PMF[i_data, i_rep])
+            print('time for PMF and data '+ Data + ' : ', allTime_PMF[i_data, i_rep])
 
-
-conc_RSF_hyper_mean = np.nanmean(np.nanmean(conc_RSF_hyper, axis=0), axis=0)
-best_indices_RSF = np.where(np.nanmax(conc_RSF_hyper_mean)==conc_RSF_hyper_mean)
-print(best_indices_RSF)
-num_tree_opt = num_trees[int(best_indices_RSF[0])]
-num_node_opt = num_nodes_rsf[int(best_indices_RSF[1])]
-num_try_opt = m_tries[int(best_indices_RSF[2])]
-
-conc_bigSurvMLP_hyper_mean = np.nanmean(np.nanmean(conc_bigSurvMLP_hyper, axis=0), axis=0)
-best_indices_bigSurvMLP = np.where(np.nanmax(conc_bigSurvMLP_hyper_mean)==conc_bigSurvMLP_hyper_mean)
-batch_size_bigSurvMLP_opt = batch_sizes[int(best_indices_bigSurvMLP[0])]
-dropout_bigSurvMLP_opt = dropouts[int(best_indices_bigSurvMLP[1])]
-LR_bigSurvMLP_opt = LRs[int(best_indices_bigSurvMLP[2])]
-
-conc_CoxCC_hyper_mean = np.nanmean(np.nanmean(conc_CoxCC_hyper, axis=0), axis=0)
-best_indices_CoxCC = np.where(np.nanmax(conc_CoxCC_hyper_mean)==conc_CoxCC_hyper_mean)
-batch_size_CoxCC_opt = batch_sizes[int(best_indices_CoxCC[0])]
-dropout_CoxCC_opt = dropouts[int(best_indices_CoxCC[1])]
-LR_CoxCC_opt = LRs[int(best_indices_CoxCC[2])]
-
-conc_CoxTime_hyper_mean = np.nanmean(np.nanmean(conc_CoxTime_hyper, axis=0), axis=0)
-best_indices_CoxTime = np.where(np.nanmax(conc_CoxTime_hyper_mean)==conc_CoxTime_hyper_mean)
-batch_size_CoxTime_opt = batch_sizes[int(best_indices_CoxTime[0])]
-dropout_CoxTime_opt = dropouts[int(best_indices_CoxTime[1])]
-LR_CoxTime_opt = LRs[int(best_indices_CoxTime[2])]
-
-conc_DeepSurv_hyper_mean = np.nanmean(np.nanmean(conc_DeepSurv_hyper, axis=0), axis=0)
-best_indices_DeepSurv = np.where(np.nanmax(conc_DeepSurv_hyper_mean)==conc_DeepSurv_hyper_mean)
-batch_size_DeepSurv_opt = batch_sizes[int(best_indices_DeepSurv[0])]
-dropout_DeepSurv_opt = dropouts[int(best_indices_DeepSurv[1])]
-LR_DeepSurv_opt = LRs[int(best_indices_DeepSurv[2])]
-
-conc_DeepHit_hyper_mean = np.nanmean(np.nanmean(conc_DeepHit_hyper, axis=0), axis=0)
-best_indices_DeepHit = np.where(np.nanmax(conc_DeepHit_hyper_mean)==conc_DeepHit_hyper_mean)
-batch_size_DeepHit_opt = batch_sizes[int(best_indices_DeepHit[0])]
-dropout_DeepHit_opt = dropouts[int(best_indices_DeepHit[1])]
-LR_DeepHit_opt = LRs[int(best_indices_DeepHit[2])]
-
-conc_MTLR_hyper_mean = np.nanmean(np.nanmean(conc_MTLR_hyper, axis=0), axis=0)
-best_indices_MTLR = np.where(np.nanmax(conc_MTLR_hyper_mean)==conc_MTLR_hyper_mean)
-batch_size_MTLR_opt = batch_sizes[int(best_indices_MTLR[0])]
-dropout_MTLR_opt = dropouts[int(best_indices_MTLR[1])]
-LR_MTLR_opt = LRs[int(best_indices_MTLR[2])]
-
-conc_PMF_hyper_mean = np.nanmean(np.nanmean(conc_PMF_hyper, axis=0), axis=0)
-best_indices_PMF = np.where(np.nanmax(conc_PMF_hyper_mean)==conc_PMF_hyper_mean)
-batch_size_PMF_opt = batch_sizes[int(best_indices_PMF[0])]
-dropout_PMF_opt = dropouts[int(best_indices_PMF[1])]
-LR_PMF_opt = LRs[int(best_indices_PMF[2])]
-
-conc_PCHazard_hyper_mean = np.nanmean(np.nanmean(conc_PCHazard_hyper, axis=0), axis=0)
-best_indices_PCHazard = np.where(np.nanmax(conc_PCHazard_hyper_mean)==conc_PCHazard_hyper_mean)
-batch_size_PCHazard_opt = batch_sizes[int(best_indices_PCHazard[0])]
-dropout_PCHazard_opt = dropouts[int(best_indices_PCHazard[1])]
-LR_PCHazard_opt = LRs[int(best_indices_PCHazard[2])]
-
-
-conc_coxph = np.empty((num_rep), dtype="float64")
-conc_bigSurvSGDs2 = np.empty((num_rep), dtype="float64")
-conc_bigSurvSGDs5 = np.empty((num_rep), dtype="float64")
-conc_bigSurvSGDs10 = np.empty((num_rep), dtype="float64")
-conc_bigSurvSGDs20 = np.empty((num_rep), dtype="float64")
-conc_bigSurvSGDs50 = np.empty((num_rep), dtype="float64")
-
-conc_RSF = np.empty((num_rep), dtype="float64")
-conc_RSF[:] = np.nan
-conc_bigSurvMLP = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_bigSurvMLP[:] = np.nan
-conc_CoxCC = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_CoxCC[:] = np.nan
-conc_CoxTime = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_CoxTime[:] = np.nan
-conc_DeepSurv = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_DeepSurv[:] = np.nan
-conc_DeepHit = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_DeepHit[:] = np.nan
-conc_MTLR = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_MTLR[:] = np.nan
-conc_PMF = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_PMF[:] = np.nan
-conc_PCHazard = np.empty((num_rep_hyper, num_folds), dtype="float64")
-conc_PCHazard[:] = np.nan
-
-return_conc = 'test'
-ma_weight = 0.8
-scheme = 'quantiles'
-
-# methods = ['cox', 'bigSurv', 'RSF', 'bigSurvMLP', 'CoxCC', 'DeepSurv', 'CoxTime', 'DeepHit', 'MTLR', 'PCHazard', 'PMF']
-
-# A for loop for a single split of training/testing data
-for i_rep in range(num_rep):
-    ## Indices for k-fold CV
-    np.random.seed(seed_num)
-
-    # divide data into training and testing
-    seed_num = 10000 * i_rep
-    np.random.seed(seed_num)
-    indexTrain = np.arange(0, x_all.shape[0])
-    indexTest = np.random.choice(indexTrain, size=np.int(np.floor(0.2 * len(indexTrain))),
-                                 replace=False)
-    indexTrain = np.setdiff1d(indexTrain, indexTest)
-    df_train = df_all.loc[indexTrain]
-    df_test = df_all.loc[indexTest]
-    x_train = x_all[indexTrain, :]
-    x_test = x_all[indexTest, :]
-
-    conc_coxph[i_rep] = coxPHConcPy([df_train, df_test])
-    conc_bigSurvSGDs2[i_rep] = bigSurvConcPy([df_train, df_test, 2])
-    conc_bigSurvSGDs5[i_rep] = bigSurvConcPy([df_train, df_test, 5])
-    conc_bigSurvSGDs10[i_rep] = bigSurvConcPy([df_train, df_test, 10])
-    conc_bigSurvSGDs20[i_rep] = bigSurvConcPy([df_train, df_test, 20])
-    conc_bigSurvSGDs50[i_rep] = bigSurvConcPy([df_train, df_test, 50])
-
-    params = [num_tree_opt, num_node_opt, num_try_opt, return_conc, df_trainCV, df_valCV,
-              df_test]
-    conc_RSF_hyper[i_rep] = rsfConcPy(params)
-
-    indices_fold = np.random.choice(len(indexTrain),
-                                    size=np.int(num_folds * np.floor(len(indexTrain) / num_folds)),
-                                    replace=False, p=None)
-    indices_fold_mat = indices_fold.reshape(np.int(np.floor(len(indexTrain) / num_folds)),
-                                            num_folds)
-    for i_cv in range(num_folds):
-        df_valCV = df_train.iloc[indices_fold_mat[:, i_cv]]
-        df_trainCV = df_train.iloc[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv])]
-        x_valCV = x_train[indices_fold_mat[:, i_cv], :]
-        x_trainCV = x_train[np.setdiff1d(indices_fold, indices_fold_mat[:, i_cv]), :]
-
-
-
-        params_bigSurvMLP = [batch_size_bigSurvMLP_opt, dropout_bigSurvMLP_opt,
-                             LR_bigSurvMLP_opt, num_nodes,
-                             BATCH_NORM, ACTIVATION, epochs, strata_size,
-                             epoch_test, if_early_stop, Patience, return_conc,
-                             df_trainCV, x_trainCV, df_valCV, x_valCV,
-                             df_test, x_test]
-        params_CoxCC = [batch_size_CoxCC_opt, dropout_CoxCC_opt,
-                        LR_CoxCC_opt, num_nodes,
-                        BATCH_NORM, ACTIVATION, epochs, Patience,
-                        return_conc, df_trainCV, x_trainCV, df_valCV,
-                        x_valCV, df_test, x_test]
-        params_CoxTime = [batch_size_CoxTime_opt, dropout_CoxTime_opt,
-                          LR_CoxTime_opt, num_nodes,
-                          BATCH_NORM, ACTIVATION, epochs, Patience,
-                          return_conc, df_trainCV, x_trainCV, df_valCV,
-                          x_valCV, df_test, x_test]
-        params_DeepSurv = [batch_size_DeepSurv_opt, dropout_DeepSurv_opt,
-                           LR_DeepSurv_opt, num_nodes,
-                           BATCH_NORM, ACTIVATION, epochs, Patience,
-                           return_conc, df_trainCV, x_trainCV, df_valCV,
-                           x_valCV, df_test, x_test]
-        params_DeepHit = [batch_size_DeepHit_opt, dropout_DeepHit_opt,
-                          LR_DeepHit_opt, num_nodes,
-                          BATCH_NORM, ACTIVATION, epochs, Patience,
-                          num_durations, return_conc, df_trainCV, x_trainCV,
-                          df_valCV, x_valCV, df_test, x_test]
-        params_MTLR = [batch_size_MTLR_opt, dropout_MTLR_opt,
-                       LR_MTLR_opt, num_nodes,
-                       BATCH_NORM, ACTIVATION, epochs, Patience,
-                       num_durations, return_conc, df_trainCV, x_trainCV,
-                       df_valCV, x_valCV, df_test, x_test]
-        params_PMF = [batch_size_PMF_opt, dropout_PMF_opt,
-                      LR_PMF_opt, num_nodes,
-                      BATCH_NORM, ACTIVATION, epochs, Patience,
-                      num_durations, return_conc, df_trainCV, x_trainCV,
-                      df_valCV, x_valCV, df_test, x_test]
-        params_PCHazard = [batch_size_PCHazard_opt, dropout_PCHazard_opt,
-                           LR_PCHazard_opt, num_nodes,
-                           BATCH_NORM, ACTIVATION, epochs, Patience,
-                           num_durations, return_conc, df_trainCV, x_trainCV,
-                           df_valCV, x_valCV, df_test, x_test]
-
-        conc_bigSurvMLP[i_rep, i_cv] = bigSurvSGDMLP(params_bigSurvMLP)
-        conc_CoxCC[i_rep, i_cv] = CoxCC_met(params_CoxCC)
-        conc_CoxTime[i_rep, i_cv] = CoxTime_met(params_CoxTime)
-        conc_DeepSurv[i_rep, i_cv] = DeepSurv_met(params_DeepSurv)
-        conc_DeepHit[i_rep, i_cv] = DeepHit_met(params_DeepHit)
-        conc_MTLR[i_rep, i_cv] = MTLR_met(params_MTLR)
-        conc_PMF[i_rep, i_cv] = PMF_met(params_PMF)
-        conc_PCHazard[i_rep, i_cv] = PCHazard_met(params_PCHazard)
-
-print('coxph(): ', np.mean(conc_coxph))
-print('bigSurvSGDs2: ', np.mean(conc_bigSurvSGDs2))
-print('bigSurvSGDs5: ', np.mean(conc_bigSurvSGDs5))
-print('bigSurvSGDs10: ', np.mean(conc_bigSurvSGDs10))
-print('bigSurvSGDs20: ', np.mean(conc_bigSurvSGDs20))
-print('bigSurvSGDs50: ', np.mean(conc_bigSurvSGDs50))
-print('RSF: ', np.mean(conc_RSF))
-print('bigSurvMLP: ', np.mean(conc_bigSurvMLP))
-print('CoxCC: ', np.mean(conc_CoxCC))
-print('CoxTime: ', np.mean(conc_CoxTime))
-print('DeepSurv: ', np.mean(conc_DeepSurv))
-print('DeepHit: ', np.mean(conc_DeepHit))
-print('MTLR: ', np.mean(conc_MTLR))
-print('PMF: ', np.mean(conc_PMF))
-print('PCHazard: ', np.mean(conc_PCHazard))
+    print('==================================================================================')
+    print('Average of testing concordance index for different methods and tabular datasets: ')
+    print('Mean concordance index for CoxPH: ', np.nanmean(allConc_coxph, axis=1))
+    print('Mean concordance index for bigSurvSGDs2 : ', np.nanmean(allConc_bigSurvSGDs2, axis=1))
+    print('Mean concordance index for bigSurvSGDs5 : ', np.nanmean(allConc_bigSurvSGDs5, axis=1))
+    print('Mean concordance index for bigSurvSGDs10 : ', np.nanmean(allConc_bigSurvSGDs10, axis=1))
+    print('Mean concordance index for bigSurvSGDs20 : ', np.nanmean(allConc_bigSurvSGDs20, axis=1))
+    print('Mean concordance index for bigSurvSGDs50 : ', np.nanmean(allConc_bigSurvSGDs50, axis=1))
+    print('Mean concordance index for RSF : ', np.nanmean(allConc_RSF, axis=1))
+    print('Mean concordance index for CoxCC : ', np.nanmean(allConc_CoxCC, axis=1))
+    print('Mean concordance index for CoxTime : ', np.nanmean(allConc_CoxTime, axis=1))
+    print('Mean concordance index for DeepSurv : ', np.nanmean(allConc_DeepSurv, axis=1))
+    print('Mean concordance index for DeepHit : ', np.nanmean(allConc_DeepHit, axis=1))
+    print('Mean concordance index for MTLR : ', np.nanmean(allConc_MTLR, axis=1))
+    print('Mean concordance index for PMF : ', np.nanmean(allConc_PMF, axis=1))
+    print('Mean concordance index for PCHazard : ', np.nanmean(allConc_PCHazard, axis=1))
+    print('==================================================================================')

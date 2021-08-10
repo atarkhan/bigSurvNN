@@ -1,15 +1,10 @@
 #############################################
 ## import all required packages
-import sys
 import numpy as np
-import random
 import tensorflow as tf
 import torchtuples as tt
 from torchvision import datasets, transforms
-import os
 import time
-import pandas as pd
-import pycox as Pycox
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,7 +17,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 #############################################
 ## parameters
-epochs = 200  # maximum number of epochs
+epochs = 1000  # maximum number of epochs
 epoch_test = 5  # After any epoch_test epochs, we calculate validation accuracy (to save coputing time)
 Patience = 5  # number of epochs continuing after reaching maximum validation concordance index
 p_c = 0.2  # probability of censoring
@@ -30,12 +25,11 @@ num_channels = 1  # MNIST has only one grey channel
 if_early_stop = True  # if we want to use early stopping
 strata_size = 2  # number of patient per strata (s) for our framework- different from batch size
 epoch_per_test = 5  # epoch step for which we calculate validation/test error
-N_valid = 1000  # validation sample size
-N_trains = [50, 1000, 1000]  # training sample size
-batch_sizes = [16, 64]  # mini-batch sizes
+N_samples = [100, 1000, 10000]  # training sample size
+batch_sizes = [64, 256]  # mini-batch sizes
 dropouts = [0.0, 0.2, 0.4]  # dropout rates
 LRs = [0.001, 0.0001]  # learning rates
-L2s = [0, 1e-4, 1e-2, 1e-1]  # coefficient of L2 regularization penalty
+L2s = [0, 1e-2, 1e-1]  # coefficient of L2 regularization penalty
 num_filters = [32, 64, 64]
 num_intervals = [10, 100]  # number of bins for MTLR and PMF
 N_FC = 128  # number of nodes in last fully-connected layers for bigSurvCNN
@@ -312,33 +306,29 @@ class Net(nn.Module):
 
 #############################################
 ## Data preparation for discrete models (MTLR and PMF)
+## Data preparation for discrete models
 def dataPrepDisc(numInterval, MTLR, scheme, sim_train, mnist_train,
                  index_train, index_valid, batch_size):
-    import numpy as np
     labtrans = MTLR.label_transform(numInterval, scheme)
     # Getting target values
     target_train = labtrans.fit_transform(*sim_train)
     # Training and testing data
     dataset_train = MnistSimDatasetSingle(mnist_train, *target_train)
     # Indices to choose a subset of training data
-    indicesTrain = list([np.int(index) for index in index_train])
-    indicesValid = list([np.int(index) for index in index_valid])
+    indicesTrain = list([int(index) for index in index_train])
+    if index_valid is not None:
+        indicesValid = list([int(index) for index in index_valid])
+        valid_sampler = SubsetRandomSampler(indicesValid)
+        dl_valid = DataLoader(dataset_train, batch_size=1, collate_fn=collate_fn,
+                              sampler=valid_sampler, shuffle=False)
+    else:
+        dl_valid = None
     train_sampler = SubsetRandomSampler(indicesTrain)
-    valid_sampler = SubsetRandomSampler(indicesValid)
+
     # prepare mini-batch of trainingdata
     dl_train = DataLoader(dataset_train, batch_size, collate_fn=collate_fn,
                           sampler=train_sampler)
-    dl_valid = DataLoader(dataset_train, batch_size=1, collate_fn=collate_fn,
-                          sampler=valid_sampler, shuffle=False)
-
-    dl_valid_all = torch.utils.data.Subset(mnist_train, indicesValid)
-    dataset_valid_x = MnistSimInput(dl_valid_all)
-    dl_valid_x = DataLoader(dataset_valid_x, batch_size=1,
-                            sampler=None, shuffle=False,
-                            collate_fn=None)
-    times_valid = sim_train[0][np.array(indicesValid)]
-    events_valid = sim_train[1][np.array(indicesValid)]
-    return dl_train, dl_valid, dl_valid_x, times_valid, events_valid, labtrans
+    return dl_train, dl_valid, labtrans
 
 
 #############################################
@@ -575,13 +565,13 @@ dl_test_x = DataLoader(dataset_test_x, 1, shuffle=False)
 #############################################
 ## 10 random splits of training/validation to tune hyper parameters
 num_reps = 1
-conc_PMF_hyper = np.empty((num_reps, len(N_trains), len(etas), len(batch_sizes), len(dropouts),
+conc_PMF_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                               len(LRs), len(L2s), len(num_intervals)), dtype="float64")
 conc_PMF_hyper[:] = np.nan
-conc_MTLR_hyper = np.empty((num_reps, len(N_trains), len(etas), len(batch_sizes), len(dropouts),
+conc_MTLR_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                                len(LRs), len(L2s), len(num_intervals)), dtype="float64")
 conc_MTLR_hyper[:] = np.nan
-conc_bigSurv_hyper = np.empty((num_reps, len(N_trains), len(etas), len(batch_sizes), len(dropouts),
+conc_bigSurv_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                                   len(LRs), len(L2s)), dtype="float64")
 conc_bigSurv_hyper[:] = np.nan
 return_conc = 'valid'
@@ -599,14 +589,15 @@ for i_rep in range(num_reps):
     allIndices_train = []
     allIndices_valid = []
 
-    for i_n in range(len(N_trains)):
-        N_train = N_trains[i_n]
-        N_trvl = N_valid + N_train  # total number of samples for tarinig and validation
+    for i_n in range(len(N_samples)):
+        N_sample = N_samples[i_n]
+        N_train = int(0.8*N_sample)
+        N_valid = N_sample - N_train
         for i in range(10):  # 10: number of digits
-            N_sample = int(digit_ratio[0] * N_trvl)
+            N_sample_digit = int(digit_ratio[0] * N_sample)
             N_tr = int(digit_ratio[0] * N_train)
             indices_sample = list(np.random.choice([x for x in range(len(allDigits)) if allDigits[x] == i],
-                                            size=N_sample, replace=False))
+                                            size=N_sample_digit, replace=False))
             allIndices_train = np.append(allIndices_train, indices_sample[0:N_tr])
             allIndices_valid = np.append(allIndices_valid, indices_sample[N_tr:len(indices_sample)])
 
@@ -694,39 +685,39 @@ dropout_bigSurv = []
 LR_bigSurv = []
 L2_bigSurv = []
 
-batch_size_MTLR = np.empty((len(N_trains), len(etas)), dtype="float64")
+batch_size_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
 batch_size_MTLR[:] = np.nan
-dropout_MTLR = np.empty((len(N_trains), len(etas)), dtype="float64")
+dropout_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
 dropout_MTLR[:] = np.nan
-LR_MTLR = np.empty((len(N_trains), len(etas)), dtype="float64")
+LR_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
 LR_MTLR[:] = np.nan
-L2_MTLR = np.empty((len(N_trains), len(etas)), dtype="float64")
+L2_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
 L2_MTLR[:] = np.nan
-num_interval_MTLR = np.empty((len(N_trains), len(etas)), dtype="float64")
+num_interval_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
 num_interval_MTLR[:] = np.nan
 
-batch_size_PMF = np.empty((len(N_trains), len(etas)), dtype="float64")
+batch_size_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
 batch_size_PMF[:] = np.nan
-dropout_PMF = np.empty((len(N_trains), len(etas)), dtype="float64")
+dropout_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
 dropout_PMF[:] = np.nan
-LR_PMF = np.empty((len(N_trains), len(etas)), dtype="float64")
+LR_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
 LR_PMF[:] = np.nan
-L2_PMF = np.empty((len(N_trains), len(etas)), dtype="float64")
+L2_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
 L2_PMF[:] = np.nan
-num_interval_PMF = np.empty((len(N_trains), len(etas)), dtype="float64")
+num_interval_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
 num_interval_PMF[:] = np.nan
 
-batch_size_bigSurv = np.empty((len(N_trains), len(etas)), dtype="float64")
+batch_size_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
 batch_size_bigSurv[:] = np.nan
-dropout_bigSurv = np.empty((len(N_trains), len(etas)), dtype="float64")
+dropout_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
 dropout_bigSurv[:] = np.nan
-LR_bigSurv = np.empty((len(N_trains), len(etas)), dtype="float64")
+LR_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
 LR_bigSurv[:] = np.nan
-L2_bigSurv = np.empty((len(N_trains), len(etas)), dtype="float64")
+L2_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
 L2_bigSurv[:] = np.nan
 
 
-for i_n in range(len(N_trains)):
+for i_n in range(len(N_samples)):
     for i_eta in range(len(etas)):
         best_hypers_MTLR = np.where(np.nanmax(mean_rep_hypers_MTLR[i_n, i_eta,:,:,:,:]) == mean_rep_hypers_MTLR[i_n, i_eta,:,:,:,:])
         batch_size_MTLR[i_n,i_eta]=batch_sizes[int(best_hypers_MTLR[0])]
@@ -754,20 +745,20 @@ for i_n in range(len(N_trains)):
 #############################################
 ## 10 random splits of training/validation to tune hyper parameters
 num_reps = 1
-conc_PMF_test = np.empty((num_reps, len(N_trains), len(etas)), dtype="float64")
+conc_PMF_test = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 conc_PMF_test[:] = np.nan
-conc_MTLR_test = np.empty((num_reps, len(N_trains), len(etas)), dtype="float64")
+conc_MTLR_test = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 conc_MTLR_test[:] = np.nan
-conc_bigSurv_test = np.empty((num_reps, len(N_trains), len(etas)), dtype="float64")
+conc_bigSurv_test = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 conc_bigSurv_test[:] = np.nan
 return_conc = 'test'
 ma_weight = 0.8
 scheme = 'quantiles'
-f_betas_bigSurv = np.empty((num_reps, len(N_trains), len(etas), 10000), dtype="float64")
+f_betas_bigSurv = np.empty((num_reps, len(N_samples), len(etas), 10000), dtype="float64")
 f_betas_bigSurv[:] = np.nan
 digits = mnist_test.targets.numpy()  # digit values
 
-conc_oracle = np.empty((num_reps, len(N_trains), len(etas)), dtype="float64")
+conc_oracle = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 
 for i_rep in range(num_reps):
     seed_num = i_rep * 1000
@@ -780,15 +771,16 @@ for i_rep in range(num_reps):
     allIndices_train = []
     allIndices_valid = []
 
-    for i_n in range(len(N_trains)):
-        N_train = N_trains[i_n]
-        N_trvl = N_valid + N_train  # total number of samples for tarinig and validation
+    for i_n in range(len(N_samples)):
+        N_sample = N_samples[i_n]
+        N_train = int(0.8*N_sample)
+        N_valid = N_samples[i_n]-N_train
 
         for i in range(10):  # 10: number of digits
-            N_sample = int(digit_ratio[0] * N_trvl)
+            N_sample_digit = int(digit_ratio[0] * N_sample)
             N_tr = int(digit_ratio[0] * N_train)
             indices = list(np.random.choice([x for x in range(len(allDigits)) if allDigits[x] == i],
-                                        size=N_sample, replace=False))
+                                        size=N_sample_digit, replace=False))
             allIndices_train = np.append(allIndices_train, indices[0:N_tr])
             allIndices_valid = np.append(allIndices_valid, indices[N_tr:len(indices)])
 
@@ -891,13 +883,13 @@ plotFig5Main = robjects.r('''
                             lines(etas, mean_rep_test_oracle, lty=1, pch=1, col='black', lwd=2)
                             legend("bottomright", lty = c(rep(c(1,2,4),3), 1), 
                             col=c("green", "green", "green", "red","red","red", "blue","blue","blue", "black"),
-                               c(expression(paste("bigSurvCNN, ",plain(n)[train] == 50)), 
+                               c(expression(paste("bigSurvCNN, ",plain(n)[train] == 100)), 
                                         expression(paste("bigSurvCNN, ",plain(n)[train] == 1000)), 
                                                  expression(paste("bigSurvCNN, ",plain(n)[train] == 10000)),
-                                                          expression(paste("PMF, ",plain(n)[train] == 50)), 
+                                                          expression(paste("PMF, ",plain(n)[train] == 100)), 
                                                                    expression(paste("PMF, ",plain(n)[train] == 1000)), 
                                                                             expression(paste("PMF, ",plain(n)[train] == 10000)),
-                                                                                     expression(paste("MTLR, ",plain(n)[train] == 50)), 
+                                                                                     expression(paste("MTLR, ",plain(n)[train] == 100)), 
                                                                                               expression(paste("MTLR, ",plain(n)[train] == 1000)), 
                                                                                                        expression(paste("MTLR, ",plain(n)[train] == 10000)),
                                                                                                                 "Oracle"), lwd = rep(2,7),bty = "n", cex = 1)
@@ -907,22 +899,22 @@ plotFig5Main = robjects.r('''
 plotFig5Main(etas, mean_rep_test_bigSurv, mean_rep_test_MTLR, mean_rep_test_PMF, mean_rep_test_oracle)
 
 # Predicted risk score for bigSurv
-f_betas_N50_eta01 = f_betas_bigSurv[0,0,0,:]
-f_betas_N50_eta50 = f_betas_bigSurv[0,0,5,:]
+f_betas_N100_eta01 = f_betas_bigSurv[0,0,0,:]
+f_betas_N100_eta50 = f_betas_bigSurv[0,0,5,:]
 f_betas_N10000_eta01 = f_betas_bigSurv[0,2,0,:]
 f_betas_N10000_eta50 = f_betas_bigSurv[0,2,5,:]
 
 plotFig3Supp = robjects.r('''
                         # plots figure 3 in the supplementary materials
-                        plotFig3Supp <- function(f_betas_N50_eta01, f_betas_N50_eta50, f_betas_N10000_eta01, f_betas_N10000_eta50, digits){
+                        plotFig3Supp <- function(f_betas_N100_eta01, f_betas_N100_eta50, f_betas_N10000_eta01, f_betas_N10000_eta50, digits){
                             pdf(file="trueVSpredScore_jitter_LR.pdf")
                             par(mfrow=c(2,2))
-                            f_betas_N50_eta01 = f_betas_N50_eta01 - mean(f_betas_N50_eta01)
-                            linModel <- summary(lm(f_betas_N50_eta01~digits))$coef[,1]
+                            f_betas_N100_eta01 = f_betas_N100_eta01 - mean(f_betas_N100_eta01)
+                            linModel <- summary(lm(f_betas_N100_eta01~digits))$coef[,1]
                             xLM <- 0:9
                             yLM <- linModel[1] + linModel[2]*xLM
-                            plot(f_betas_N50_eta01~jitter(digits,1), pch='.', cex=0.5,
-                            main= expression(paste(plain(n)[train] == 50, "  and  ", eta == 0.1)),
+                            plot(f_betas_N100_eta01~jitter(digits,1), pch='.', cex=0.5,
+                            main= expression(paste(plain(n)[train] == 100, "  and  ", eta == 0.1)),
                             xlab="digit value",
                             ylab="centered predicted score",
                             col="grey",
@@ -932,11 +924,11 @@ plotFig3Supp = robjects.r('''
                             legend(-1,15, paste0("slope = ", round(linModel[2],3)), cex = 1, bty = "n", 
                                 bg = "white", text.col = 'blue')
 
-                            f_betas_N50_eta50 = f_betas_N50_eta50 - mean(f_betas_N50_eta50)
-                            linModel <- summary(lm(f_betas_N50_eta50~digits))$coef[,1]
+                            f_betas_N100_eta50 = f_betas_N100_eta50 - mean(f_betas_N100_eta50)
+                            linModel <- summary(lm(f_betas_N100_eta50~digits))$coef[,1]
                             yLM <- linModel[1] + linModel[2]*xLM
-                            plot(f_betas_N50_eta50~jitter(digits,1), pch='.', cex=0.5,
-                            main= expression(paste(plain(n)[train] == 50, "  and  ", eta == 5)),
+                            plot(f_betas_N100_eta50~jitter(digits,1), pch='.', cex=0.5,
+                            main= expression(paste(plain(n)[train] == 100, "  and  ", eta == 5)),
                             xlab="digit value",
                             ylab="centered predicted score",
                             col="grey",
@@ -978,4 +970,4 @@ plotFig3Supp = robjects.r('''
                             dev.off()                            
                         }
 ''')
-plotFig3Supp(f_betas_N50_eta01, f_betas_N50_eta50, f_betas_N10000_eta01, f_betas_N10000_eta50, digits)
+plotFig3Supp(f_betas_N100_eta01, f_betas_N100_eta50, f_betas_N10000_eta01, f_betas_N10000_eta50, digits)
