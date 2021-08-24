@@ -17,11 +17,8 @@ num_folds = 5
 def initializer_params():
     ## hyperparameters for RSF
     num_trees = [100, 500]
-    #num_trees = [10]
     num_nodes_rsf = [5, 15]
-    #num_nodes_rsf = [5]
     m_tries = [2, 3, 4, 5]
-    #m_tries = [2]
     hyperParams_RSF = []
     for i_tree in num_trees:
         for i_node in num_nodes_rsf:
@@ -37,12 +34,9 @@ def initializer_params():
     BATCH_NORM = False
     ACTIVATION = 'relu'
     dropouts = [0.0, 0.2, 0.4]  # 0.0, 0.1, 0.2, 0.3, 0.4, 0.5
-    #dropouts = [0.0]
 
     output_bias = False
-    # batch_sizes = [2,4,8,16,32,64,128, 256] # 32, 64, 128, 256
     batch_sizes = [64, 256]
-    #batch_sizes = [256]
 
     strata_size = 2
     epochs = 200
@@ -54,7 +48,6 @@ def initializer_params():
 
     num_durations = 100  # number of discrete intervals on time axis
     LRs = [0.0001, 0.001, 0.01]  # 0.1, 0.01, 0.001, 0.0001
-    #LRs = [0.001]  # 0.1, 0.01, 0.001, 0.0001
 
     # hyperparameters for BigSurvMLP
     hyperParams_BigSurvMLP = []
@@ -619,7 +612,7 @@ def bigSurvSGDMLP(x):
         conc_trainAll.append(np.nanmean(conc_train))
         #print("training conc: ", np.mean(conc_trainAll))
         if return_conc == 'valid':
-            if (i_e + 1) % epoch_test == 0:
+            if (i_e + 1) % min(epoch_test, epochs) == 0:
                 f_beta_valid = eval(x_valid, indices_valid, mnist_model)
                 conc_valid.append(calc_conc(f_beta_valid, times_valid, events_valid))
                 if (if_early_stop & (i_e > (Patience * epoch_test))):
