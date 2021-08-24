@@ -28,7 +28,7 @@ epoch_per_test = 5  # epoch step for which we calculate validation/test error
 N_samples = [100, 1000, 10000]  # training sample size
 batch_sizes = [64, 256]  # mini-batch sizes
 dropouts = [0.0, 0.2, 0.4]  # dropout rates
-LRs = [0.001, 0.0001]  # learning rates
+LRs = [0.001]  # learning rates
 L2s = [0, 1e-2, 1e-1]  # coefficient of L2 regularization penalty
 num_filters = [32, 64, 64]
 num_intervals = [10, 100]  # number of bins for MTLR and PMF
@@ -44,7 +44,6 @@ digit_ratio = np.repeat(0.1, 10)  # percentage of digits to use for validation a
 #############################################
 ## simulated time-to-event outcomes
 def sim_event_times(mnist, eta, p_c=0.2):
-    #np.random.seed(seed_num)
     digits = mnist.targets.numpy()  # digit values
     censored = np.random.binomial(1, p_c, len(digits))  # censoring indices
     etaX = eta * digits  # risk score
@@ -68,7 +67,6 @@ def calc_conc(f_beta, Timess, Eventss):
     conc_Bin = 0
     k = 0  # counts number of comparable pairs
     for i in range(len(Eventss) - 1):
-        # t1 < t2 and risk1 > risk2, d1 = 1
         Time1 = Timess[i]
         Time2 = Timess[(i + 1):len(Eventss)]
         Event1 = Eventss[i]
@@ -320,14 +318,18 @@ def dataPrepDisc(numInterval, MTLR, scheme, sim_train, mnist_train,
         valid_sampler = SubsetRandomSampler(indicesValid)
         dl_valid = DataLoader(dataset_train, batch_size=1, collate_fn=collate_fn,
                               sampler=valid_sampler, shuffle=False)
+        dataset_valid_x = MnistSimInput(mnist_train)
+        dl_valid_x = DataLoader(dataset_valid_x, batch_size, sampler=valid_sampler, shuffle=False)
+
     else:
         dl_valid = None
+        dl_valid_x = None
     train_sampler = SubsetRandomSampler(indicesTrain)
 
     # prepare mini-batch of trainingdata
     dl_train = DataLoader(dataset_train, batch_size, collate_fn=collate_fn,
                           sampler=train_sampler)
-    return dl_train, dl_valid, labtrans
+    return dl_train, dl_valid, dl_valid_x, labtrans
 
 
 #############################################
@@ -386,7 +388,6 @@ def bigSurvSGDNN(x):
     mnist_model = whole_model(num_channels, dropout, L2)
     conc_valid = []
     conc_test = []
-    f_betas_test = []
     conc_trainAll = []
 
     for i_e in range(epochs):
@@ -422,32 +423,29 @@ def bigSurvSGDNN(x):
             conc_train.append(results)
         conc_trainAll.append(np.nanmean(conc_train))
 
-        if (i_e + 1) % epoch_test == 0:
-            f_beta_valid = eval(x_valid, indices_valid, mnist_model)
-            conc_valid.append(calc_conc(f_beta_valid, times_valid, events_valid))
-            if return_conc == 'test':
+        if return_conc == 'test':
+            if i_e == (epochs-1):
                 f_beta_test = eval(x_test, indices_test, mnist_model)
-                f_betas_test.append(f_beta_test)
-                conc_test.append(calc_conc(f_beta_test, times_test, events_test))
-            if (if_early_stop & (i_e > (Patience * epoch_test))):
-                conc_validMA = np.empty((len(conc_valid)))
-                conc_validMA[:] = np.nan
-                conc_validMA[0] = conc_valid[0]
-                for k in range(1, len(conc_valid)):
-                    weights = np.power(ma_weight, k - np.arange(k + 1))
-                    conc_validMA[k] = np.ma.average(conc_valid[0:(k + 1)], weights=weights)
-                if np.prod(conc_validMA[len(conc_validMA) - 1] < conc_validMA[(len(conc_validMA) - Patience - 1):(
-                        len(conc_validMA) - 1)]):
-                    break
+                conc_test = calc_conc(f_beta_test, times_test, events_test)
+        else: # if return_conc == 'valid':
+            if (i_e + 1) % min(epochs, epoch_test) == 0:
+                f_beta_valid = eval(x_valid, indices_valid, mnist_model)
+                conc_valid.append(calc_conc(f_beta_valid, times_valid, events_valid))
+
+                if (if_early_stop & (i_e > (Patience * epoch_test))):
+                    conc_validMA = np.empty((len(conc_valid)))
+                    conc_validMA[:] = np.nan
+                    conc_validMA[0] = conc_valid[0]
+                    for k in range(1, len(conc_valid)):
+                        weights = np.power(ma_weight, k - np.arange(k + 1))
+                        conc_validMA[k] = np.ma.average(conc_valid[0:(k + 1)], weights=weights)
+                    if np.prod(conc_validMA[len(conc_validMA) - 1] < conc_validMA[(len(conc_validMA) - Patience - 1):(
+                            len(conc_validMA) - 1)]):
+                        break
     if return_conc == 'test':
-        if if_early_stop == True:
-            optEpoch = np.int((np.nanargmax(conc_valid) + 1) * epoch_test)
-            conc_return = conc_test[np.nanargmax(conc_valid)]
-            f_beta = f_betas_test[np.nanargmax(conc_valid)]
-        else:
-            optEpoch = epochs
-            conc_return = conc_test[len(conc_test) - 1]
-            f_beta = f_betas_test[len(conc_test) - 1]
+        conc_return = conc_test
+        f_beta = f_beta_test
+        optEpoch = epochs
     else:
         if if_early_stop == True:
             optEpoch = np.int((np.nanargmax(conc_valid) + 1) * epoch_test)
@@ -465,84 +463,81 @@ def bigSurvSGDNN(x):
 #############################################
 ## The main fucntion to read data and train network
 def MTLR_CNN(x):
-    epochs = x[0]
-    num_channels = x[1]
-    batch_size = x[2]
-    dropout = x[3]
-    LR = x[4]
-    l2_p = x[5]
-    numInterval = x[6]
-    if_early_stop = x[7]
-    Patience = x[8]
-    labtrans = x[9]
-    return_conc = x[10]
-    dl_train = x[11]
-    dl_valid = x[12]
-    dl_valid_x = x[13]
-    times_valid = x[14]
-    events_valid = x[15]
-    dl_test_x = x[16]
-    sim_test = x[17]
+    dropout = x[0]
+    LR = x[1]
+    l2_p = x[2]
+    epochs = x[3]
+    if_early_stop = x[4]
+    Patience = x[5]
+    labtrans = x[6]
+    return_conc = x[7]
+    dl_train = x[8]
+    dl_valid = x[9]
+    dl_test_x = x[10]
+    sim_test = x[11]
 
     out_features = labtrans.out_features
     net = Net(out_features, dropout)
-    model_MTLR = MTLR(net, tt.optim.Adam(LR, weight_decay=l2_p), duration_index=labtrans.cuts)
+    model = MTLR(net, tt.optim.Adam(LR, weight_decay=l2_p), duration_index=labtrans.cuts)
 
-    # Set early stopping criteria
-    if if_early_stop:
-        callbacks = [tt.cb.EarlyStopping(patience=Patience)]
-    else:
-        callbacks = [tt.cb.EarlyStopping(patience=(epochs - 2), min_delta=10)]
-    log = model_MTLR.fit_dataloader(dl_train, epochs, callbacks, verbose=False, val_dataloader=dl_valid)
     if return_conc == 'valid':
-        surv = model_MTLR.predict_surv_df(dl_valid_x)
-        conc = concDisc(surv, times_valid, events_valid)
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model.fit_dataloader(dl_train, epochs=epochs, callbacks=callbacks,
+                                            verbose=False, val_dataloader=dl_valid)
+            val_loss_epochs = log.to_pandas()['val_loss']
+            optEpochs = np.nanargmin(val_loss_epochs)
+            optValLoss = np.nanmin(val_loss_epochs)
+        else:
+            log = model.fit_dataloader(dl_train, epochs, verbose=False, val_dataloader=dl_valid)
+            val_loss_epochs = log.to_pandas()['val_loss']
+            optEpochs = np.nanargmin(val_loss_epochs)
+            optValLoss = np.nanmin(val_loss_epochs)
+        return ([optValLoss, optEpochs + 1])
     else:
-        surv = model_MTLR.predict_surv_df(dl_test_x)
-        conc = concDisc(surv, np.array(sim_test[0]), np.array(sim_test[1]))
-    return (conc)
-#############################################
+        log = model.fit_dataloader(dl_train, epochs, verbose=False)
+        surv = model.predict_surv_df(dl_test_x)
+        return (concDisc(surv, np.array(sim_test[0]), np.array(sim_test[1])))
 
 
 #############################################
 ## The main fucntion to read data and train network for MTLR
 def PMF_CNN(x):
-    epochs = x[0]
-    num_channels = x[1]
-    batch_size = x[2]
-    dropout = x[3]
-    LR = x[4]
-    l2_p = x[5]
-    numInterval = x[6]
-    if_early_stop = x[7]
-    Patience = x[8]
-    labtrans = x[9]
-    return_conc = x[10]
-    dl_train = x[11]
-    dl_valid = x[12]
-    dl_valid_x = x[13]
-    times_valid = x[14]
-    events_valid = x[15]
-    dl_test_x = x[16]
-    sim_test = x[17]
+    dropout = x[0]
+    LR = x[1]
+    l2_p = x[2]
+    epochs = x[3]
+    if_early_stop = x[4]
+    Patience = x[5]
+    labtrans = x[6]
+    return_conc = x[7]
+    dl_train = x[8]
+    dl_valid = x[9]
+    dl_test_x = x[10]
+    sim_test = x[11]
 
     out_features = labtrans.out_features
     net = Net(out_features, dropout)
-    model_PMF = PMF(net, tt.optim.Adam(LR, weight_decay=l2_p), duration_index=labtrans.cuts)
+    model = PMF(net, tt.optim.Adam(LR, weight_decay=l2_p), duration_index=labtrans.cuts)
 
-    # Set early stopping criteria
-    if if_early_stop:
-        callbacks = [tt.cb.EarlyStopping(patience=Patience)]
-    else:
-        callbacks = [tt.cb.EarlyStopping(patience=(epochs - 2), min_delta=10)]
-    log = model_PMF.fit_dataloader(dl_train, epochs, callbacks, verbose=False, val_dataloader=dl_valid)
     if return_conc == 'valid':
-        surv = model_PMF.predict_surv_df(dl_valid_x)
-        conc = concDisc(surv, times_valid, events_valid)
+        if if_early_stop:
+            callbacks = [tt.callbacks.EarlyStopping(patience=Patience)]
+            log = model.fit_dataloader(dl_train, epochs=epochs, callbacks=callbacks,
+                                       verbose=False, val_dataloader=dl_valid)
+            val_loss_epochs = log.to_pandas()['val_loss']
+            optEpochs = np.nanargmin(val_loss_epochs)
+            optValLoss = np.nanmin(val_loss_epochs)
+        else:
+            log = model.fit_dataloader(dl_train, epochs, verbose=False, val_dataloader=dl_valid)
+            val_loss_epochs = log.to_pandas()['val_loss']
+            optEpochs = np.nanargmin(val_loss_epochs)
+            optValLoss = np.nanmin(val_loss_epochs)
+        return ([optValLoss, optEpochs + 1])
     else:
-        surv = model_PMF.predict_surv_df(dl_test_x)
-        conc = concDisc(surv, np.array(sim_test[0]), np.array(sim_test[1]))
-    return (conc)
+        log = model.fit_dataloader(dl_train, epochs, verbose=False)
+        surv = model.predict_surv_df(dl_test_x)
+        return (concDisc(surv, np.array(sim_test[0]), np.array(sim_test[1])))
 #############################################
 
 
@@ -567,12 +562,27 @@ num_reps = 1
 conc_PMF_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                               len(LRs), len(L2s), len(num_intervals)), dtype="float64")
 conc_PMF_hyper[:] = np.nan
+
+epoch_PMF_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
+                              len(LRs), len(L2s), len(num_intervals)), dtype="float64")
+epoch_PMF_hyper[:] = np.nan
+
 conc_MTLR_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                                len(LRs), len(L2s), len(num_intervals)), dtype="float64")
 conc_MTLR_hyper[:] = np.nan
+
+epoch_MTLR_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
+                               len(LRs), len(L2s), len(num_intervals)), dtype="float64")
+epoch_MTLR_hyper[:] = np.nan
+
 conc_bigSurv_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
                                   len(LRs), len(L2s)), dtype="float64")
 conc_bigSurv_hyper[:] = np.nan
+
+epoch_bigSurv_hyper = np.empty((num_reps, len(N_samples), len(etas), len(batch_sizes), len(dropouts),
+                                  len(LRs), len(L2s)), dtype="float64")
+epoch_bigSurv_hyper[:] = np.nan
+
 return_conc = 'valid'
 ma_weight = 0.8
 scheme = 'quantiles'
@@ -640,105 +650,110 @@ for i_rep in range(num_reps):
                                       L2, strata_size, if_early_stop, Patience, return_conc,
                                       x_train, x_valid, x_test, times_train, times_valid,
                                       times_test, events_train, events_valid, events_test, ma_weight]
-                            conc_bigSurv_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2] = bigSurvSGDNN(params)[0]
+                            results_bigSurv = bigSurvSGDNN(params)
+                            conc_bigSurv_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2] = results_bigSurv[0]
+                            epoch_bigSurv_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2] = results_bigSurv[1]
 
                             for i_num in range(len(num_intervals)):
                                 num_interval = num_intervals[i_num]
-                                dl_train, dl_valid, dl_valid_x, times_valid, events_valid, labtrans = dataPrepDisc(num_interval,
-                                                                                                                   MTLR,
-                                                                                                                   scheme,
-                                                                                                                   sim_train,
-                                                                                                                   mnist_train,
-                                                                                                                   index_train,
-                                                                                                                   index_valid,
-                                                                                                                   batch_size)
-                                params = [epochs, num_channels, batch_size, dropout, LR, L2, num_interval,
-                                          if_early_stop, Patience, labtrans, return_conc, dl_train, dl_valid,
-                                          dl_valid_x, times_valid, events_valid, dl_test_x, sim_test]
-                                conc_MTLR_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = MTLR_CNN(params)
-                                conc_PMF_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = PMF_CNN(params)
+                                dl_train, dl_valid, dl_valid_x, labtrans = dataPrepDisc(num_interval,MTLR,scheme,
+                                                                                        sim_train,mnist_train,index_train,
+                                                                                        index_valid,batch_size)
+                                params = [dropout, LR, L2, epochs, if_early_stop, Patience, labtrans,
+                                          return_conc, dl_train, dl_valid, dl_test_x, sim_test]
+                                results_MTLR = MTLR_CNN(params)
+                                conc_MTLR_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = results_MTLR[0]
+                                epoch_MTLR_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = results_MTLR[1]
+
+                                results_PMF = PMF_CNN(params)
+                                conc_PMF_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = results_PMF[0]
+                                epoch_PMF_hyper[i_rep, i_n, i_eta, i_bs, i_dr, i_lr, i_l2, i_num] = results_PMF[1]
 #############################################
 
 
 #############################################
 ## Find the best hyperparameters over 10 random splits
 # For MTLR
-mean_rep_hypers_MTLR = np.nanmean(conc_MTLR_hyper, axis=0)
-mean_rep_hypers_PMF = np.nanmean(conc_PMF_hyper, axis=0)
-mean_rep_hypers_bigSurv = np.nanmean(conc_bigSurv_hyper, axis=0)
-
-batch_size_MTLR = []
-dropout_MTLR = []
-LR_MTLR = []
-L2_MTLR = []
-num_interval_MTLR = []
-
-batch_size_PMF = []
-dropout_PMF = []
-LR_PMF = []
-L2_PMF = []
-num_interval_PMF = []
-
-batch_size_bigSurv = []
-dropout_bigSurv = []
-LR_bigSurv = []
-L2_bigSurv = []
-
-batch_size_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
+batch_size_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 batch_size_MTLR[:] = np.nan
-dropout_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
+dropout_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 dropout_MTLR[:] = np.nan
-LR_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
+LR_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 LR_MTLR[:] = np.nan
-L2_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
+L2_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 L2_MTLR[:] = np.nan
-num_interval_MTLR = np.empty((len(N_samples), len(etas)), dtype="float64")
+num_interval_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 num_interval_MTLR[:] = np.nan
+epoch_MTLR = np.empty((num_reps, len(N_samples), len(etas)), dtype="int")
+epoch_MTLR[:] = np.nan
 
-batch_size_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
+# For MTLR
+batch_size_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 batch_size_PMF[:] = np.nan
-dropout_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
+dropout_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 dropout_PMF[:] = np.nan
-LR_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
+LR_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 LR_PMF[:] = np.nan
-L2_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
+L2_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 L2_PMF[:] = np.nan
-num_interval_PMF = np.empty((len(N_samples), len(etas)), dtype="float64")
+num_interval_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 num_interval_PMF[:] = np.nan
+epoch_PMF = np.empty((num_reps, len(N_samples), len(etas)), dtype="int")
+epoch_PMF[:] = np.nan
 
-batch_size_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
+# For bigSurv
+batch_size_bigSurv = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 batch_size_bigSurv[:] = np.nan
-dropout_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
+dropout_bigSurv = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 dropout_bigSurv[:] = np.nan
-LR_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
+LR_bigSurv = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 LR_bigSurv[:] = np.nan
-L2_bigSurv = np.empty((len(N_samples), len(etas)), dtype="float64")
+L2_bigSurv = np.empty((num_reps, len(N_samples), len(etas)), dtype="float64")
 L2_bigSurv[:] = np.nan
+epoch_bigSurv = np.empty((num_reps, len(N_samples), len(etas)), dtype="int")
+epoch_bigSurv[:] = np.nan
 
+for i_r in range(num_reps):
+    for i_n in range(len(N_samples)):
+        for i_eta in range(len(etas)):
+            best_hypers_MTLR = np.where(np.nanmin(conc_MTLR_hyper[i_r, i_n, i_eta,:,:,:,:,:]) == conc_MTLR_hyper[i_r, i_n, i_eta,:,:,:,:,:])
+            batch_size_MTLR[i_r, i_n,i_eta]=batch_sizes[int(best_hypers_MTLR[0])]
+            dropout_MTLR[i_r, i_n,i_eta]=dropouts[int(best_hypers_MTLR[1])]
+            LR_MTLR[i_r, i_n,i_eta]=LRs[int(best_hypers_MTLR[2])]
+            L2_MTLR[i_r, i_n,i_eta]=L2s[int(best_hypers_MTLR[3])]
+            num_interval_MTLR[i_r, i_n,i_eta]=num_intervals[int(best_hypers_MTLR[4])]
+            epoch_MTLR[i_r, i_n,i_eta] = epoch_MTLR_hyper[i_r, i_n, i_eta,
+                                         int(best_hypers_MTLR[0]),
+                                         int(best_hypers_MTLR[1]),
+                                         int(best_hypers_MTLR[2]),
+                                         int(best_hypers_MTLR[3]),
+                                         int(best_hypers_MTLR[4])]
 
-for i_n in range(len(N_samples)):
-    for i_eta in range(len(etas)):
-        best_hypers_MTLR = np.where(np.nanmax(mean_rep_hypers_MTLR[i_n, i_eta,:,:,:,:]) == mean_rep_hypers_MTLR[i_n, i_eta,:,:,:,:])
-        batch_size_MTLR[i_n,i_eta]=batch_sizes[int(best_hypers_MTLR[0])]
-        dropout_MTLR[i_n,i_eta]=dropouts[int(best_hypers_MTLR[1])]
-        LR_MTLR[i_n,i_eta]=LRs[int(best_hypers_MTLR[2])]
-        L2_MTLR[i_n,i_eta]=L2s[int(best_hypers_MTLR[3])]
-        num_interval_MTLR[i_n,i_eta]=num_intervals[int(best_hypers_MTLR[4])]
+            best_hypers_PMF = np.where(np.nanmin(conc_PMF_hyper[i_r, i_n, i_eta, :, :, :, :,:]) == conc_PMF_hyper[i_r, i_n, i_eta, :, :, :, :,:])
+            batch_size_PMF[i_r, i_n,i_eta]=batch_sizes[int(best_hypers_PMF[0])]
+            dropout_PMF[i_r, i_n,i_eta]=dropouts[int(best_hypers_PMF[1])]
+            LR_PMF[i_r, i_n,i_eta]=LRs[int(best_hypers_PMF[2])]
+            L2_PMF[i_r, i_n,i_eta]=L2s[int(best_hypers_PMF[3])]
+            num_interval_PMF[i_r, i_n,i_eta] = num_intervals[int(best_hypers_PMF[4])]
+            epoch_PMF[i_r, i_n, i_eta] = epoch_PMF_hyper[i_r, i_n, i_eta,
+                                                           int(best_hypers_PMF[0]),
+                                                           int(best_hypers_PMF[1]),
+                                                           int(best_hypers_PMF[2]),
+                                                           int(best_hypers_PMF[3]),
+                                                           int(best_hypers_PMF[4])]
 
-        best_hypers_PMF = np.where(np.nanmax(mean_rep_hypers_PMF[i_n, i_eta, :, :, :, :]) == mean_rep_hypers_PMF[i_n, i_eta, :, :, :, :])
-        batch_size_PMF[i_n,i_eta]=batch_sizes[int(best_hypers_PMF[0])]
-        dropout_PMF[i_n,i_eta]=dropouts[int(best_hypers_PMF[1])]
-        LR_PMF[i_n,i_eta]=LRs[int(best_hypers_PMF[2])]
-        L2_PMF[i_n,i_eta]=L2s[int(best_hypers_PMF[3])]
-        num_interval_PMF[i_n,i_eta]=num_intervals[int(best_hypers_PMF[4])]
-
-        best_hypers_bigSurv = np.where(np.nanmax(mean_rep_hypers_bigSurv[i_n, i_eta, :, :, :]) == mean_rep_hypers_bigSurv[i_n, i_eta, :, :, :])
-        batch_size_bigSurv[i_n,i_eta]=batch_sizes[int(best_hypers_bigSurv[0])]
-        dropout_bigSurv[i_n,i_eta]=dropouts[int(best_hypers_bigSurv[1])]
-        LR_bigSurv[i_n,i_eta]=LRs[int(best_hypers_bigSurv[2])]
-        L2_bigSurv[i_n,i_eta]=L2s[int(best_hypers_bigSurv[3])]
+            best_hypers_bigSurv = np.where(np.nanmax(conc_bigSurv_hyper[i_r, i_n, i_eta, :, :, :,:]) == conc_bigSurv_hyper[i_r, i_n, i_eta, :, :, :,:])
+            best_hypers_bigSurv = np.asarray(best_hypers_bigSurv)
+            batch_size_bigSurv[i_r, i_n,i_eta]=batch_sizes[best_hypers_bigSurv[0][0].astype('int')]
+            dropout_bigSurv[i_r, i_n,i_eta]=dropouts[best_hypers_bigSurv[1][0].astype('int')]
+            LR_bigSurv[i_r, i_n,i_eta]=LRs[best_hypers_bigSurv[2][0].astype('int')]
+            L2_bigSurv[i_r, i_n,i_eta]=L2s[best_hypers_bigSurv[3][0].astype('int')]
+            epoch_bigSurv[i_r, i_n, i_eta] = epoch_PMF_hyper[i_r, i_n, i_eta,
+                                                         int(best_hypers_bigSurv[0]),
+                                                         int(best_hypers_bigSurv[1]),
+                                                         int(best_hypers_bigSurv[2]),
+                                                         int(best_hypers_bigSurv[3])]
 #############################################
-
 
 
 #############################################
@@ -810,33 +825,33 @@ for i_rep in range(num_reps):
             times_valid = times_train_all[index_valid]
             events_train = events_train_all[index_train]
             events_valid = events_train_all[index_valid]
-
-            params = [epochs, epoch_test, num_channels, int(batch_size_bigSurv[i_n, i_eta]), dropout_bigSurv[i_n, i_eta],
-                  LR_bigSurv[i_n, i_eta],  L2_bigSurv[i_n, i_eta], strata_size, if_early_stop, Patience, return_conc,
-                  x_train, x_valid, x_test, times_train, times_valid, times_test, events_train, events_valid,
-                  events_test, ma_weight]
+            print(epoch_bigSurv[i_rep, i_n, i_eta])
+            params = [epoch_bigSurv[i_rep, i_n, i_eta], epoch_test, num_channels, int(batch_size_bigSurv[i_rep, i_n, i_eta]),
+                      dropout_bigSurv[i_rep, i_n, i_eta], LR_bigSurv[i_rep, i_n, i_eta],  L2_bigSurv[i_rep, i_n, i_eta],
+                      strata_size, if_early_stop, Patience, return_conc, x_train, x_valid, x_test, times_train,
+                      times_valid, times_test, events_train, events_valid, events_test, ma_weight]
             results_bigSurv_test = bigSurvSGDNN(params)
             conc_bigSurv_test[i_rep, i_n, i_eta] = results_bigSurv_test[0]
             f_betas_bigSurv[i_rep, i_n, i_eta, :] = results_bigSurv_test[4]
 
-            dl_train_MTLR, dl_valid_MTLR, dl_valid_x_MTLR, times_valid_MTLR, events_valid_MTLR, labtrans_MTLR = dataPrepDisc(int(num_interval_MTLR[i_n, i_eta]), MTLR,
+            dl_train_MTLR, dl_valid_MTLR, dl_valid_x_MTLR, labtrans_MTLR = dataPrepDisc(int(num_interval_MTLR[i_rep, i_n, i_eta]), MTLR,
                                                                                                                          scheme, sim_train,
-                                                                                                                         mnist_train, index_train,
-                                                                                                                         index_valid, int(batch_size_MTLR[i_n, i_eta]))
-            params = [epochs, num_channels, int(batch_size_MTLR[i_n, i_eta]), dropout_MTLR[i_n, i_eta], LR_MTLR[i_n, i_eta],
-                  L2_MTLR[i_n, i_eta], int(num_interval_MTLR[i_n, i_eta]), if_early_stop, Patience, labtrans_MTLR,
-                  return_conc, dl_train, dl_valid_MTLR, dl_valid_x_MTLR, times_valid_MTLR,
-                  events_valid_MTLR, dl_test_x, sim_test]
+                                                                                                                        mnist_train, index_train,
+                                                                                                                         index_valid,
+                                                                                        int(batch_size_MTLR[i_rep, i_n, i_eta]))
+
+            params = [dropout_MTLR[i_rep, i_n, i_eta], LR_MTLR[i_rep, i_n, i_eta], L2_MTLR[i_rep, i_n, i_eta],
+                      epoch_MTLR[i_rep, i_n, i_eta], if_early_stop, Patience, labtrans_MTLR,return_conc,
+                      dl_train_MTLR, dl_valid_MTLR, dl_test_x, sim_test]
             conc_MTLR_test[i_rep, i_n, i_eta] = MTLR_CNN(params)
 
-            dl_train_PMF, dl_valid_PMF, dl_valid_x_PMF, times_valid_PMF, events_valid_PMF, labtrans_PMF = dataPrepDisc(int(num_interval_PMF[i_n, i_eta]), MTLR,
+            dl_train_PMF, dl_valid_PMF, dl_valid_x_PMF, labtrans_PMF = dataPrepDisc(int(num_interval_PMF[i_rep, i_n, i_eta]), MTLR,
                                                                                                                    scheme, sim_train, mnist_train,
                                                                                                                    index_train, index_valid,
-                                                                                                                   int(batch_size_PMF[i_n, i_eta]))
-            params = [epochs, num_channels, int(batch_size_PMF[i_n, i_eta]), dropout_PMF[i_n, i_eta], LR_PMF[i_n, i_eta],
-                  L2_PMF[i_n, i_eta], int(num_interval_PMF[i_n, i_eta]), if_early_stop, Patience, labtrans_PMF,
-                  return_conc, dl_train, dl_valid_PMF, dl_valid_x_PMF, times_valid_PMF,
-                  events_valid_PMF, dl_test_x, sim_test]
+                                                                                                                   int(batch_size_PMF[i_rep, i_n, i_eta]))
+            params = [dropout_PMF[i_rep, i_n, i_eta], LR_PMF[i_rep, i_n, i_eta], L2_PMF[i_rep, i_n, i_eta],
+                      epoch_PMF[i_rep, i_n, i_eta], if_early_stop, Patience, labtrans_PMF, return_conc,
+                      dl_train_PMF, dl_valid_PMF, dl_test_x, sim_test]
             conc_PMF_test[i_rep, i_n, i_eta] = PMF_CNN(params)
 #############################################
 
@@ -845,11 +860,8 @@ for i_rep in range(num_reps):
 #############################################
 ## Find the best hyperparameters over 10 random splits
 mean_rep_test_MTLR = np.nanmean(conc_MTLR_test, axis=0)
-print(mean_rep_test_MTLR)
 mean_rep_test_PMF = np.nanmean(conc_PMF_test, axis=0)
-print(mean_rep_test_PMF)
 mean_rep_test_bigSurv = np.nanmean(conc_bigSurv_test, axis=0)
-print(mean_rep_test_bigSurv)
 mean_rep_test_oracle = np.nanmean(np.nanmean(conc_oracle, axis=0), axis=0)
 #############################################
 
@@ -899,9 +911,9 @@ plotFig5Main(etas, mean_rep_test_bigSurv, mean_rep_test_MTLR, mean_rep_test_PMF,
 
 # Predicted risk score for bigSurv
 f_betas_N100_eta01 = f_betas_bigSurv[0,0,0,:]
-f_betas_N100_eta50 = f_betas_bigSurv[0,0,5,:]
-f_betas_N10000_eta01 = f_betas_bigSurv[0,2,0,:]
-f_betas_N10000_eta50 = f_betas_bigSurv[0,2,5,:]
+f_betas_N100_eta50 = f_betas_bigSurv[0,0,len(etas),:]
+f_betas_N10000_eta01 = f_betas_bigSurv[0,len(N_samples),0,:]
+f_betas_N10000_eta50 = f_betas_bigSurv[0,len(N_samples),len(etas),:]
 
 plotFig3Supp = robjects.r('''
                         # plots figure 3 in the supplementary materials
